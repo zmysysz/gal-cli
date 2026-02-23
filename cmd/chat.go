@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/gal-cli/gal-cli/internal/agent"
 	"github.com/gal-cli/gal-cli/internal/config"
 	"github.com/gal-cli/gal-cli/internal/engine"
@@ -45,7 +46,24 @@ var (
 	sHint    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	sHintSel = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
 	sBar     = lipgloss.NewStyle().Faint(true)
+	sLogo    = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
+	sDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
+
+func banner(agentName, modelName string) string {
+	logo := sLogo.Render(`
+   ██████╗  █████╗ ██╗      █████╗ ██╗  ██╗██╗   ██╗
+  ██╔════╝ ██╔══██╗██║     ██╔══██╗╚██╗██╔╝╚██╗ ██╔╝
+  ██║  ███╗███████║██║     ███████║ ╚███╔╝  ╚████╔╝
+  ██║   ██║██╔══██║██║     ██╔══██║ ██╔██╗   ╚██╔╝
+  ╚██████╔╝██║  ██║███████╗██║  ██║██╔╝ ██╗   ██║
+   ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝`)
+
+	info := sInfo.Render(fmt.Sprintf("  Agent: %s │ Model: %s", agentName, modelName))
+	hints := sDim.Render("  /help commands │ /quit exit │ ↑↓ history │ Tab complete")
+
+	return logo + "\n\n" + info + "\n" + hints
+}
 
 type streamChunkMsg string
 type streamToolMsg string
@@ -189,7 +207,7 @@ type model struct {
 
 func initialModel(eng *engine.Engine, cfg *config.Config, reg *tool.Registry) model {
 	ti := textinput.New()
-	ti.Prompt = sPrompt.Render("> ")
+	ti.Prompt = ""
 	ti.Focus()
 	ti.CharLimit = 0
 	ti.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("7"))
@@ -242,9 +260,7 @@ func (m model) Init() tea.Cmd {
 		m.input.Cursor.SetMode(cursor.CursorStatic),
 		m.spinner.Tick,
 		setIBeamCursor,
-		tea.Println(sInfo.Render(fmt.Sprintf("Agent: %s │ Model: %s", m.eng.Agent.Conf.Name, m.eng.Agent.CurrentModel))),
-		tea.Println(sFaint.Render("Type /help for commands, /quit to exit")),
-		tea.Println(""),
+		tea.Println(banner(m.eng.Agent.Conf.Name, m.eng.Agent.CurrentModel)),
 	)
 }
 
@@ -377,6 +393,89 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// wrapInput renders the textinput value with soft-wrap and a cursor.
+func (m *model) wrapInput() string {
+	prompt := sPrompt.Render("> ")
+	promptW := 2 // "> " is 2 chars
+	contentW := m.width - promptW
+	if contentW < 1 {
+		contentW = 1
+	}
+
+	val := m.input.Value()
+	pos := m.input.Position()
+	runes := []rune(val)
+
+	// Insert a cursor marker
+	const cur = "\x00"
+	var buf strings.Builder
+	for i, r := range runes {
+		if i == pos {
+			buf.WriteString(cur)
+		}
+		buf.WriteRune(r)
+	}
+	if pos >= len(runes) {
+		buf.WriteString(cur)
+	}
+	text := buf.String()
+
+	// Split into visual lines by display width
+	textRunes := []rune(text)
+	var lines []string
+	for len(textRunes) > 0 {
+		w := 0
+		end := 0
+		for end < len(textRunes) {
+			r := textRunes[end]
+			rw := 0
+			if r != '\x00' {
+				rw = runewidth.RuneWidth(r)
+			}
+			if w+rw > contentW && w > 0 {
+				break
+			}
+			w += rw
+			end++
+		}
+		if end == 0 {
+			end = 1
+		}
+		lines = append(lines, string(textRunes[:end]))
+		textRunes = textRunes[end:]
+	}
+	if len(lines) == 0 {
+		lines = []string{cur}
+	}
+
+	// Render with cursor
+	curStyle := lipgloss.NewStyle().Reverse(true)
+	var out strings.Builder
+	for i, line := range lines {
+		pfx := "  "
+		if i == 0 {
+			pfx = prompt
+		}
+		// Replace cursor marker with styled cursor
+		if strings.Contains(line, cur) {
+			parts := strings.SplitN(line, cur, 2)
+			ch := " "
+			rest := parts[1]
+			if len(rest) > 0 {
+				r := []rune(rest)
+				ch = string(r[0])
+				rest = string(r[1:])
+			}
+			line = parts[0] + curStyle.Render(ch) + rest
+		}
+		out.WriteString(pfx + line)
+		if i < len(lines)-1 {
+			out.WriteString("\n")
+		}
+	}
+	return out.String()
+}
+
 func (m model) View() string {
 	if m.waiting {
 		if m.streaming != "" {
@@ -384,7 +483,7 @@ func (m model) View() string {
 		}
 		return m.spinner.View() + sFaint.Render(" thinking...")
 	}
-	return m.input.View() + "\n" + m.statusBar()
+	return m.wrapInput() + "\n" + m.statusBar()
 }
 
 // --- send to LLM ---
@@ -446,7 +545,8 @@ func (m *model) handleCommand(input string) (string, bool) {
   /quit                Exit
 
 Keys:
-  ↑/↓                  Input history
+  ↑/↓                  Input history (on first/last line)
+  Shift+Enter          New line
   Tab/Shift+Tab        Autocomplete
   Mouse wheel          Scroll screen`), false
 	case "/agent":
