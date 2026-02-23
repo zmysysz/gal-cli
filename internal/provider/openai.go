@@ -110,7 +110,7 @@ func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Messag
 		}
 		for _, tc := range delta.ToolCalls {
 			if _, ok := tcAcc[tc.Index]; !ok {
-				tcAcc[tc.Index] = &ToolCall{}
+				tcAcc[tc.Index] = &ToolCall{Type: "function"}
 			}
 			acc := tcAcc[tc.Index]
 			if tc.ID != "" {

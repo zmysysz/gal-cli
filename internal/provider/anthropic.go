@@ -139,7 +139,7 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 			}
 		case "content_block_stop":
 			if currentToolID != "" {
-				tc := ToolCall{ID: currentToolID}
+				tc := ToolCall{ID: currentToolID, Type: "function"}
 				tc.Function.Name = currentToolName
 				tc.Function.Arguments = currentToolArgs
 				onDelta(StreamDelta{ToolCalls: []ToolCall{tc}})
