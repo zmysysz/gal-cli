@@ -10,6 +10,7 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "gal-cli",
 	Short: "GAL-CLI — Multi-agent CLI tool",
+	CompletionOptions: cobra.CompletionOptions{HiddenDefaultCmd: true},
 }
 
 func Execute() {
