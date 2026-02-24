@@ -14,10 +14,10 @@ A multi-agent CLI tool with tool/skill/MCP management and model switching.
 
 ```bash
 # Build
-go build -o gal .
+make
 
 # Initialize config
-./gal init
+./gal-cli init
 
 # Set API keys
 export OPENAI_API_KEY="sk-..."
@@ -25,12 +25,12 @@ export OPENAI_API_KEY="sk-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 
 # Start chatting
-./gal chat
+./gal-cli chat
 ```
 
 ## Configuration
 
-`gal init` creates default configs at `~/.gal/`:
+`gal-cli init` creates default configs at `~/.gal/`:
 
 ```
 ~/.gal/
@@ -87,11 +87,11 @@ Model format: `<provider>/<model_id>` (e.g. `openai/gpt-4o`, `deepseek/deepseek-
 ## CLI Commands
 
 ```bash
-gal chat                    # start chat with default agent
-gal chat -a <agent>         # start chat with specific agent
-gal agent list              # list all agents
-gal agent show <name>       # show agent config
-gal init                    # initialize ~/.gal/
+gal-cli chat                    # start chat with default agent
+gal-cli chat -a <agent>         # start chat with specific agent
+gal-cli agent list              # list all agents
+gal-cli agent show <name>       # show agent config
+gal-cli init                    # initialize ~/.gal/
 ```
 
 ### In-Chat Commands
@@ -120,6 +120,25 @@ skills/code_review/
 Skills are resolved from `./skills/` (project-local) then `~/.gal/skills/` (global).
 
 Scripts in `scripts/` are auto-discovered and exposed to the LLM as callable tools. The LLM can invoke them like built-in tools — input via stdin/args, output via stdout.
+
+### Supported Script Formats
+
+Any executable file works — the only requirement is OS-level executability:
+
+- Shell scripts (bash, sh, zsh) with `#!/bin/bash` shebang + `chmod +x`
+- Python scripts with `#!/usr/bin/env python3` shebang + `chmod +x`
+- Node.js, Ruby, or any other interpreted language (with shebang)
+- Compiled binaries (Go, C, Rust, etc.)
+
+Scripts run with working directory set to the skill root, so relative paths resolve from there. Both stdout and stderr are captured and returned to the LLM.
+
+> **Note:** All files in `scripts/` are registered as tools regardless of extension. Avoid placing non-executable files there. Also, tool names are derived by stripping the extension, so `lint.sh` and `lint.py` would collide.
+
+## Agentic Loop
+
+When the LLM decides to call a tool (built-in or skill script), gal-cli executes it and feeds the result back to the LLM automatically. This loop continues until the LLM produces a final text response — supporting complex multi-step tasks that require many rounds of tool use.
+
+> **Note:** There is currently no iteration limit on the agentic loop. The full conversation history (including all tool calls and results) is sent on every round, so context window usage grows with each iteration.
 
 ## Built-in Tools
 

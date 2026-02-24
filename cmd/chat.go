@@ -601,7 +601,7 @@ Keys:
 func runChat(agentName string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("run 'gal init' first: %w", err)
+		return fmt.Errorf("run 'gal-cli init' first: %w", err)
 	}
 	if agentName == "" {
 		agentName = cfg.DefaultAgent

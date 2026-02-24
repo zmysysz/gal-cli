@@ -8,7 +8,7 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "gal",
+	Use:   "gal-cli",
 	Short: "GAL-CLI — Multi-agent CLI tool",
 }
 
