@@ -80,7 +80,6 @@ tools:
   - bash
 skills:
   - code_review
-skill_load: eager    # "eager" (default) or "lazy" (planned)
 ```
 
 Model format: `<provider>/<model_id>` (e.g. `openai/gpt-4o`, `deepseek/deepseek-chat`).
@@ -147,6 +146,9 @@ When the LLM decides to call a tool (built-in or skill script), gal-cli executes
 |------|-------------|
 | `file_read` | Read file content |
 | `file_write` | Write/create files |
+| `file_edit` | Replace lines by range (more efficient than file_write for partial edits) |
+| `file_list` | List directory tree with configurable depth |
+| `grep` | Search text pattern in files recursively |
 | `bash` | Execute shell commands |
 
 ## License

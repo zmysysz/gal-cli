@@ -25,14 +25,17 @@ import (
 
 func init() {
 	var agentName string
+	var debug bool
 	chatCmd := &cobra.Command{
 		Use:   "chat",
 		Short: "Start interactive chat",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runChat(agentName)
+			return runChat(agentName, debug)
 		},
 	}
 	chatCmd.Flags().StringVarP(&agentName, "agent", "a", "", "Agent name (default: from config)")
+	chatCmd.Flags().BoolVar(&debug, "debug", false, "")
+	chatCmd.Flags().MarkHidden("debug")
 	rootCmd.AddCommand(chatCmd)
 }
 
@@ -615,7 +618,7 @@ Keys:
 
 // --- entry ---
 
-func runChat(agentName string) error {
+func runChat(agentName string, debug bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("run 'gal-cli init' first: %w", err)
@@ -628,6 +631,11 @@ func runChat(agentName string) error {
 	if err != nil {
 		return err
 	}
+	eng.Debug = debug
+	if debug {
+		eng.InitDebug()
+	}
+	defer eng.Close()
 	m := initialModel(eng, cfg, reg)
 	p := tea.NewProgram(m)
 	_, err = p.Run()

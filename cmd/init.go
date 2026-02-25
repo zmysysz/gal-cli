@@ -59,10 +59,12 @@ default_model: openai/gpt-4o
 tools:
   - file_read
   - file_write
+  - file_edit
+  - file_list
+  - grep
   - bash
 
 skills: []
-skill_load: eager
 mcps: []
 `
 

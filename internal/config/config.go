@@ -36,7 +36,6 @@ type AgentConf struct {
 	DefaultModel string   `yaml:"default_model"`
 	Tools        []string `yaml:"tools"`
 	Skills       []string `yaml:"skills"`
-	SkillLoad    string   `yaml:"skill_load,omitempty"` // "eager" (default) or "lazy"
 	MCPs         []string `yaml:"mcps"`
 }
 
