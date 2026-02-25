@@ -80,6 +80,7 @@ tools:
   - bash
 skills:
   - code_review
+skill_load: eager    # "eager" (default) or "lazy" (planned)
 ```
 
 Model format: `<provider>/<model_id>` (e.g. `openai/gpt-4o`, `deepseek/deepseek-chat`).
@@ -114,10 +115,10 @@ Skills are self-contained capability packs that extend an agent with domain-spec
 skills/code_review/
 ├── SKILL.md           # injected into system prompt
 └── scripts/
-    └── lint.sh        # auto-registered as tool "skill:code_review:lint"
+    └── lint.sh        # auto-registered as tool "skill_code_review_lint"
 ```
 
-Skills are resolved from `./skills/` (project-local) then `~/.gal/skills/` (global).
+Skills are resolved from `~/.gal/skills/` (global) then `./skills/` (project-local).
 
 Scripts in `scripts/` are auto-discovered and exposed to the LLM as callable tools. The LLM can invoke them like built-in tools — input via stdin/args, output via stdout.
 

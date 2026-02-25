@@ -17,15 +17,15 @@ type Anthropic struct {
 }
 
 func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Message, tools []ToolDef, onDelta func(StreamDelta)) error {
-	// separate system message
 	var system string
 	var msgs []map[string]any
+
 	for _, m := range messages {
 		if m.Role == "system" {
 			system = m.Content
 			continue
 		}
-		msg := map[string]any{"role": m.Role}
+
 		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
 			var content []map[string]any
 			if m.Content != "" {
@@ -33,7 +33,9 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 			}
 			for _, tc := range m.ToolCalls {
 				var input any
-				json.Unmarshal([]byte(tc.Function.Arguments), &input)
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil || input == nil {
+					input = map[string]any{}
+				}
 				content = append(content, map[string]any{
 					"type":  "tool_use",
 					"id":    tc.ID,
@@ -41,18 +43,30 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 					"input": input,
 				})
 			}
-			msg["content"] = content
+			msgs = append(msgs, map[string]any{"role": "assistant", "content": content})
 		} else if m.Role == "tool" {
-			msg["role"] = "user"
-			msg["content"] = []map[string]any{{
+			block := map[string]any{
 				"type":        "tool_result",
 				"tool_use_id": m.ToolCallID,
-				"content":     m.Content,
-			}}
+				"content":     []map[string]any{{"type": "text", "text": m.Content}},
+			}
+			// merge consecutive tool results into one user message
+			if len(msgs) > 0 && msgs[len(msgs)-1]["role"] == "user" {
+				if prev, ok := msgs[len(msgs)-1]["content"].([]map[string]any); ok {
+					msgs[len(msgs)-1]["content"] = append(prev, block)
+					continue
+				}
+			}
+			msgs = append(msgs, map[string]any{
+				"role":    "user",
+				"content": []map[string]any{block},
+			})
 		} else {
-			msg["content"] = m.Content
+			msgs = append(msgs, map[string]any{
+				"role":    m.Role,
+				"content": m.Content,
+			})
 		}
-		msgs = append(msgs, msg)
 	}
 
 	body := map[string]any{
@@ -85,7 +99,7 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 	req.Header.Set("x-api-key", a.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doWithRetry(req, payload)
 	if err != nil {
 		return err
 	}

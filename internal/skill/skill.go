@@ -44,7 +44,7 @@ func Load(dir string) (*Skill, error) {
 			continue
 		}
 		scriptName := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
-		toolName := fmt.Sprintf("skill:%s:%s", name, scriptName)
+		toolName := fmt.Sprintf("skill_%s_%s", name, scriptName)
 		s.ScriptDefs = append(s.ScriptDefs, provider.ToolDef{
 			Name:        toolName,
 			Description: fmt.Sprintf("Run %s script from skill %s", scriptName, name),
@@ -62,16 +62,17 @@ func Load(dir string) (*Skill, error) {
 
 // Resolve finds a skill directory by name, searching local then global paths.
 func Resolve(name string) (string, error) {
-	// project-local
-	local := filepath.Join("skills", name)
-	if info, err := os.Stat(local); err == nil && info.IsDir() {
-		return local, nil
-	}
-	// user-global
+	// user-global (standard directory)
 	home, _ := os.UserHomeDir()
 	global := filepath.Join(home, ".gal", "skills", name)
 	if info, err := os.Stat(global); err == nil && info.IsDir() {
 		return global, nil
+	}
+	// project-local (fallback)
+	local := filepath.Join("skills", name)
+	if info, err := os.Stat(local); err == nil && info.IsDir() {
+		abs, _ := filepath.Abs(local)
+		return abs, nil
 	}
 	return "", fmt.Errorf("skill not found: %s", name)
 }
@@ -80,7 +81,7 @@ func Resolve(name string) (string, error) {
 func RegisterScripts(s *Skill, reg *tool.Registry) {
 	scriptsDir := filepath.Join(s.Dir, "scripts")
 	for _, def := range s.ScriptDefs {
-		scriptFile := strings.TrimPrefix(def.Name, fmt.Sprintf("skill:%s:", s.Name))
+		scriptFile := strings.TrimPrefix(def.Name, fmt.Sprintf("skill_%s_", s.Name))
 		// find the actual file with extension
 		entries, _ := os.ReadDir(scriptsDir)
 		var fullPath string
@@ -93,6 +94,8 @@ func RegisterScripts(s *Skill, reg *tool.Registry) {
 		if fullPath == "" {
 			continue
 		}
+		// ensure script is executable
+		os.Chmod(fullPath, 0755)
 		fp := fullPath // capture
 		reg.Register(def, func(ctx context.Context, args map[string]any) (string, error) {
 			input, _ := args["input"].(string)

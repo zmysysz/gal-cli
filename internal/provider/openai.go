@@ -47,7 +47,7 @@ func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Messag
 		req.Header.Set("Authorization", "Bearer "+o.APIKey)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doWithRetry(req, payload)
 	if err != nil {
 		return err
 	}

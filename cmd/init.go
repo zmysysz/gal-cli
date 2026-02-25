@@ -62,6 +62,7 @@ tools:
   - bash
 
 skills: []
+skill_load: eager
 mcps: []
 `
 

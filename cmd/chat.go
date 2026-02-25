@@ -589,7 +589,24 @@ Keys:
 			}
 			return strings.Join(out, "\n"), false
 		}
-		m.eng.SwitchModel(parts[1])
+		newModel := parts[1]
+		mp := strings.SplitN(newModel, "/", 2)
+		if len(mp) != 2 {
+			return sErr.Render("✘ invalid model format: " + newModel + " (expected provider/model)"), false
+		}
+		pConf, ok := m.cfg.Providers[mp[0]]
+		if !ok {
+			return sErr.Render("✘ unknown provider: " + mp[0]), false
+		}
+		var p provider.Provider
+		switch pConf.Type {
+		case "anthropic":
+			p = &provider.Anthropic{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
+		default:
+			p = &provider.OpenAI{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
+		}
+		m.eng.Provider = p
+		m.eng.SwitchModel(newModel)
 		return sOK.Render("✔ Model: " + m.eng.Agent.CurrentModel), false
 	default:
 		return sErr.Render("Unknown command: " + cmd + " (type /help)"), false
