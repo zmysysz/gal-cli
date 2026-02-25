@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gal-cli/gal-cli/internal/config"
+	"github.com/gal-cli/gal-cli/internal/mcp"
 	"github.com/gal-cli/gal-cli/internal/provider"
 	"github.com/gal-cli/gal-cli/internal/skill"
 	"github.com/gal-cli/gal-cli/internal/tool"
@@ -19,6 +20,7 @@ type Agent struct {
 	SystemPrompt string // assembled prompt (base + skills)
 	ToolDefs     []provider.ToolDef
 	Registry     *tool.Registry
+	mcpClients   []*mcp.Client
 }
 
 func Build(conf *config.AgentConf, reg *tool.Registry) (*Agent, error) {
@@ -122,7 +124,35 @@ func Build(conf *config.AgentConf, reg *tool.Registry) (*Agent, error) {
 		a.ToolDefs = append(a.ToolDefs, reg.GetDefs([]string{"load_skills"})...)
 	}
 
+	// MCP servers
+	for mcpName, mcpConf := range conf.MCPs {
+		client := mcp.NewClient(mcpConf)
+		if err := client.Initialize(); err != nil {
+			return nil, fmt.Errorf("agent %s: mcp %s init: %w", conf.Name, mcpName, err)
+		}
+		tools, err := client.ListTools()
+		if err != nil {
+			return nil, fmt.Errorf("agent %s: mcp %s list tools: %w", conf.Name, mcpName, err)
+		}
+		for _, t := range tools {
+			origName := t.Name
+			t.Name = fmt.Sprintf("mcp_%s_%s", mcpName, origName)
+			cl := client // capture
+			on := origName
+			reg.Register(t, func(_ context.Context, args map[string]any) (string, error) {
+				return cl.CallTool(on, args)
+			})
+			a.ToolDefs = append(a.ToolDefs, t)
+		}
+		a.mcpClients = append(a.mcpClients, client)
+	}
+
 	return a, nil
+}
+
+func (a *Agent) Close() {
+	// MCP clients are HTTP-based, no cleanup needed for now
+	a.mcpClients = nil
 }
 
 // parseFrontmatter extracts YAML frontmatter (between --- delimiters) as key-value pairs.

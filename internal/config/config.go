@@ -12,7 +12,6 @@ import (
 type Config struct {
 	DefaultAgent string                  `yaml:"default_agent"`
 	Providers    map[string]ProviderConf `yaml:"providers"`
-	MCPs         map[string]MCPConf      `yaml:"mcps"`
 }
 
 type ProviderConf struct {
@@ -23,9 +22,9 @@ type ProviderConf struct {
 }
 
 type MCPConf struct {
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args"`
-	Env     map[string]string `yaml:"env"`
+	URL     string            `yaml:"url"`
+	Headers map[string]string `yaml:"headers"`
+	Timeout int               `yaml:"timeout"` // seconds, default 30
 }
 
 type AgentConf struct {
@@ -35,8 +34,8 @@ type AgentConf struct {
 	Models       []string `yaml:"models"`
 	DefaultModel string   `yaml:"default_model"`
 	Tools        []string `yaml:"tools"`
-	Skills       []string `yaml:"skills"`
-	MCPs         []string `yaml:"mcps"`
+	Skills       []string              `yaml:"skills"`
+	MCPs         map[string]MCPConf    `yaml:"mcps"`
 }
 
 func GalDir() string {
@@ -63,6 +62,7 @@ func LoadAgent(name string) (*AgentConf, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load agent %s: %w", name, err)
 	}
+	data = []byte(os.ExpandEnv(string(data)))
 	var agent AgentConf
 	if err := yaml.Unmarshal(data, &agent); err != nil {
 		return nil, fmt.Errorf("parse agent %s: %w", name, err)

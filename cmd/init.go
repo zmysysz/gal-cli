@@ -65,7 +65,12 @@ tools:
   - bash
 
 skills: []
-mcps: []
+
+# mcps:
+#   example:
+#     url: https://mcp.example.com/rpc
+#     headers:
+#       Authorization: "Bearer ${MCP_TOKEN}"
 `
 
 func init() {
