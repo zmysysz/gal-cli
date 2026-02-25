@@ -6,8 +6,9 @@ A multi-agent CLI tool with tool/skill/MCP management and model switching.
 
 - **Multi-agent** — define multiple agents with different system prompts, tools, and models; switch on the fly
 - **Multi-provider** — OpenAI, Anthropic, DeepSeek, Ollama (any OpenAI-compatible API)
-- **Tool calling** — built-in tools (`file_read`, `file_write`, `bash`) with agentic loop
+- **Tool calling** — built-in tools (`file_read`, `file_write`, `file_edit`, `file_list`, `grep`, `bash`) with agentic loop
 - **Skills** — user-defined capability packs: prompt injection via `SKILL.md` + auto-registered script tools
+- **MCP** — connect to remote tool servers via HTTP-based Model Context Protocol
 - **Streaming** — real-time streamed responses from all providers
 
 ## Quick Start
@@ -77,9 +78,18 @@ default_model: anthropic/claude-sonnet-4-20250514
 tools:
   - file_read
   - file_write
+  - file_edit
+  - file_list
+  - grep
   - bash
 skills:
   - code_review
+mcps:
+  team_tools:
+    url: https://tools.internal.com/mcp
+    headers:
+      Authorization: "Bearer ${MCP_TOKEN}"
+    timeout: 60
 ```
 
 Model format: `<provider>/<model_id>` (e.g. `openai/gpt-4o`, `deepseek/deepseek-chat`).
@@ -117,28 +127,34 @@ skills/code_review/
     └── lint.sh        # auto-registered as tool "skill_code_review_lint"
 ```
 
-Skills are resolved from `~/.gal/skills/` (global) then `./skills/` (project-local).
+Skills are resolved from `~/.gal/skills/` (global) then `./skills/` (project-local). Small skills (SKILL.md < 1KB) are fully injected into the system prompt; larger skills are loaded on demand via the `load_skills` tool.
 
-Scripts in `scripts/` are auto-discovered and exposed to the LLM as callable tools. The LLM can invoke them like built-in tools — input via stdin/args, output via stdout.
+Scripts in `scripts/` are auto-discovered and exposed to the LLM as callable tools. The LLM can invoke them like built-in tools — input via stdin/args, output via stdout. Scripts are automatically made executable on load.
 
-### Supported Script Formats
+> **Note:** Tool names are derived by stripping the extension, so `lint.sh` and `lint.py` would collide.
 
-Any executable file works — the only requirement is OS-level executability:
+## MCP (Model Context Protocol)
 
-- Shell scripts (bash, sh, zsh) with `#!/bin/bash` shebang + `chmod +x`
-- Python scripts with `#!/usr/bin/env python3` shebang + `chmod +x`
-- Node.js, Ruby, or any other interpreted language (with shebang)
-- Compiled binaries (Go, C, Rust, etc.)
+gal-cli supports HTTP-based MCP servers for connecting to remote tool services. Configure MCP servers directly in the agent config:
 
-Scripts run with working directory set to the skill root, so relative paths resolve from there. Both stdout and stderr are captured and returned to the LLM.
+```yaml
+mcps:
+  remote_db:
+    url: https://db-tools.internal.com/mcp
+    headers:
+      Authorization: "Bearer ${DB_TOKEN}"
+    timeout: 30    # seconds, default 30
+```
 
-> **Note:** All files in `scripts/` are registered as tools regardless of extension. Avoid placing non-executable files there. Also, tool names are derived by stripping the extension, so `lint.sh` and `lint.py` would collide.
+MCP tools are auto-discovered and registered as `mcp_<server>_<tool>` (e.g. `mcp_remote_db_query`). The LLM can call them like any other tool.
+
+> **Note:** Only HTTP-based MCP is supported. For local tools, use skills instead — they're simpler and more capable (SKILL.md prompt injection).
 
 ## Agentic Loop
 
-When the LLM decides to call a tool (built-in or skill script), gal-cli executes it and feeds the result back to the LLM automatically. This loop continues until the LLM produces a final text response — supporting complex multi-step tasks that require many rounds of tool use.
+When the LLM decides to call a tool (built-in, skill script, or MCP), gal-cli executes it and feeds the result back automatically. This loop continues until the LLM produces a final text response.
 
-> **Note:** There is currently no iteration limit on the agentic loop. The full conversation history (including all tool calls and results) is sent on every round, so context window usage grows with each iteration.
+> **Note:** There is currently no iteration limit on the agentic loop. The full conversation history is sent on every round, so context window usage grows with each iteration.
 
 ## Built-in Tools
 
