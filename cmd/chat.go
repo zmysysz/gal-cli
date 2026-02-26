@@ -1104,8 +1104,10 @@ func (m *model) executeShellCmd(input string) tea.Cmd {
 		
 		// Execute command with bash -i -c to load .bashrc and aliases
 		// The -i flag makes it interactive, loading ~/.bashrc
+		// Close stdin to prevent bash from waiting for input
 		cmd := exec.Command("bash", "-i", "-c", input)
 		cmd.Dir = m.shellCwd
+		cmd.Stdin = nil // Don't connect stdin
 		out, err := cmd.CombinedOutput()
 		
 		result := string(out)
