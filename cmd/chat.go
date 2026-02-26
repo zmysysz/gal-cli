@@ -392,15 +392,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					saveHistory(m.inputHist)
 					return m, tea.Quit
 				}
-				result, quit := m.handleCommand(input)
+				msg, quit := m.handleCommand(input)
 				if quit {
 					saveHistory(m.inputHist)
 					return m, tea.Quit
 				}
-				if result != "" {
-					return m, printAbove(result)
-				}
-				return m, nil
+				// Return the message directly to Update
+				return m.Update(msg)
 			}
 			// shell mode: execute command directly
 			if m.shellMode {
@@ -457,6 +455,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case compressErrMsg:
 		m.compressing = false
 		return m, printAbove(sErr.Render("⚠ compress: " + msg.err.Error()))
+
+	case shellModeMsg:
+		m.shellMode = msg.enable
+		m.shellWithContext = msg.withContext
+		if msg.enable {
+			if msg.withContext {
+				return m, printAbove(sOK.Render("✔ Entered shell mode with context (output will be added to conversation)"))
+			}
+			return m, printAbove(sOK.Render("✔ Entered shell mode (type '/chat' to return)"))
+		}
+		return m, printAbove(sOK.Render("✔ Returned to chat mode"))
 
 	case shellOutputMsg:
 		return m, printAbove(string(msg))
@@ -638,25 +647,18 @@ func (m *model) compressCmd() tea.Cmd {
 
 // --- slash commands ---
 
-func (m *model) handleCommand(input string) (string, bool) {
+func (m *model) handleCommand(input string) (tea.Msg, bool) {
 	parts := strings.Fields(input)
 	cmd := parts[0]
 
 	switch cmd {
 	case "/shell":
-		m.shellMode = true
-		m.shellWithContext = false
 		// Check for --context flag
-		if len(parts) > 1 && parts[1] == "--context" {
-			m.shellWithContext = true
-			return sOK.Render("✔ Entered shell mode with context (output will be added to conversation)"), false
-		}
-		return sOK.Render("✔ Entered shell mode (type '/chat' to return)"), false
+		withContext := len(parts) > 1 && parts[1] == "--context"
+		return shellModeMsg{enable: true, withContext: withContext}, false
 	case "/chat":
 		if m.shellMode {
-			m.shellMode = false
-			m.shellWithContext = false
-			return sOK.Render("✔ Returned to chat mode"), false
+			return shellModeMsg{enable: false, withContext: false}, false
 		}
 		return sErr.Render("Already in chat mode"), false
 	case "/quit", "/exit":
@@ -1125,6 +1127,10 @@ type shellOutputMsg string
 type shellResultMsg struct {
 	command     string
 	output      string
+	withContext bool
+}
+type shellModeMsg struct {
+	enable      bool
 	withContext bool
 }
 
