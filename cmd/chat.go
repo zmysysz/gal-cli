@@ -1102,11 +1102,9 @@ func (m *model) executeShellCmd(input string) tea.Cmd {
 			return shellCwdMsg(newCwd)
 		}
 		
-		// Execute command
-		// Use bash with -i (interactive) to load aliases from .bashrc
-		// Wrap in 'shopt -s expand_aliases' to ensure aliases work in non-interactive mode
-		wrappedCmd := fmt.Sprintf("shopt -s expand_aliases; source ~/.bashrc 2>/dev/null; %s", input)
-		cmd := exec.Command("bash", "-c", wrappedCmd)
+		// Execute command with bash -i -c to load .bashrc and aliases
+		// The -i flag makes it interactive, loading ~/.bashrc
+		cmd := exec.Command("bash", "-i", "-c", input)
 		cmd.Dir = m.shellCwd
 		out, err := cmd.CombinedOutput()
 		
