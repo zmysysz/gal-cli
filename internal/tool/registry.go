@@ -293,7 +293,7 @@ func (r *Registry) registerBuiltins() {
 	// bash
 	r.Register(provider.ToolDef{
 		Name:        "bash",
-		Description: "Execute a bash command. Supports interactive commands that require user input (passwords, confirmations, etc.).",
+		Description: "Execute a bash command and return its output. For commands requiring interactive input (passwords, confirmations), provide the command to the user to run manually instead of executing it directly.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -305,37 +305,7 @@ func (r *Registry) registerBuiltins() {
 		command, _ := args["command"].(string)
 		cmd := exec.CommandContext(ctx, "bash", "-c", command)
 		
-		// Try to connect to /dev/tty for interactive support
-		if tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
-			defer tty.Close()
-			
-			// Connect all streams to TTY
-			cmd.Stdin = tty
-			cmd.Stdout = tty
-			cmd.Stderr = tty
-			
-			// Print separator before interactive command
-			fmt.Fprintln(tty, "\n"+strings.Repeat("─", 60))
-			fmt.Fprintf(tty, "Executing: %s\n", command)
-			fmt.Fprintln(tty, strings.Repeat("─", 60))
-			
-			// Run command interactively
-			err := cmd.Run()
-			
-			// Print separator after
-			fmt.Fprintln(tty, strings.Repeat("─", 60))
-			if err != nil {
-				fmt.Fprintf(tty, "Command failed: %v\n", err)
-				fmt.Fprintln(tty, strings.Repeat("─", 60)+"\n")
-				return fmt.Sprintf("Command failed: %v", err), nil
-			}
-			fmt.Fprintln(tty, "Command completed successfully")
-			fmt.Fprintln(tty, strings.Repeat("─", 60)+"\n")
-			
-			return "(interactive command completed, output shown above)", nil
-		}
-		
-		// Fallback: no TTY available
+		// Capture output for non-interactive commands
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return string(out) + "\n" + err.Error(), nil
