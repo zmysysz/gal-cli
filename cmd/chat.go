@@ -544,6 +544,10 @@ func (m *model) sendCmd(input string) tea.Cmd {
 			ch <- streamErrMsg{err}
 			return
 		}
+		if fullContent == "" {
+			ch <- streamErrMsg{fmt.Errorf("empty response from model (no content received)")}
+			return
+		}
 		ch <- streamDoneMsg{fullContent}
 	}()
 
