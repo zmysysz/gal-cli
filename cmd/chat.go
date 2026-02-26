@@ -34,6 +34,21 @@ func init() {
 	chatCmd := &cobra.Command{
 		Use:   "chat",
 		Short: "Start chat (interactive or non-interactive with -m)",
+		Long: `Start an interactive chat session or run in non-interactive mode.
+
+Interactive Mode:
+  gal-cli chat                    # start with default agent
+  gal-cli chat -a coder           # start with specific agent
+  gal-cli chat --session abc123   # resume session
+
+Non-Interactive Mode (with -m flag):
+  gal-cli chat -m "your message"
+  gal-cli chat -m @prompt.txt
+  echo "test" | gal-cli chat -m -
+  gal-cli chat --session abc -m "continue"
+  gal-cli chat -a coder -m "write code" > output.txt
+
+Output: stdout = LLM response, stderr = tool calls (use 2>/dev/null to suppress)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runChat(agentName, modelName, sessionID, message, debug)
 		},
@@ -624,7 +639,14 @@ Keys:
   ↑/↓                  Input history (on first/last line)
   Shift+Enter          New line
   Tab/Shift+Tab        Autocomplete
-  Mouse wheel          Scroll screen`, m.sess.ID, strings.Join(tools, ", "))), false
+  Mouse wheel          Scroll screen
+
+Non-Interactive Mode Examples:
+  gal-cli chat -m "your message"
+  gal-cli chat -m @prompt.txt
+  echo "test" | gal-cli chat -m -
+  gal-cli chat --session abc -m "continue"
+  gal-cli chat -a coder -m "write code" > output.txt`, m.sess.ID, strings.Join(tools, ", "))), false
 	case "/agent":
 		if len(parts) < 2 {
 			return sInfo.Render("Agent: " + m.eng.Agent.Conf.Name), false
