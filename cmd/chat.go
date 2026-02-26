@@ -434,6 +434,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, printAbove(rendered)
 
+	case shellCwdMsg:
+		m.shellCwd = string(msg)
+		return m, printAbove(sFaint.Render(m.shellCwd))
+
 	case compressDoneMsg:
 		m.compressing = false
 		return m, nil
@@ -1006,7 +1010,7 @@ func matchPaths(prefix string, limit int) []string {
 func (m *model) executeShellCmd(input string) tea.Cmd {
 	return func() tea.Msg {
 		// Handle cd command specially
-		if strings.HasPrefix(input, "cd ") {
+		if strings.HasPrefix(input, "cd ") || input == "cd" {
 			path := strings.TrimSpace(strings.TrimPrefix(input, "cd"))
 			if path == "" {
 				home, _ := os.UserHomeDir()
@@ -1022,8 +1026,9 @@ func (m *model) executeShellCmd(input string) tea.Cmd {
 			if err := os.Chdir(path); err != nil {
 				return printAbove(sErr.Render("✘ " + err.Error()))
 			}
-			m.shellCwd, _ = os.Getwd()
-			return printAbove(sFaint.Render(m.shellCwd))
+			// Update shellCwd - this needs to be done in Update, not here
+			newCwd, _ := os.Getwd()
+			return shellCwdMsg(newCwd)
 		}
 		
 		// Execute command
@@ -1037,12 +1042,14 @@ func (m *model) executeShellCmd(input string) tea.Cmd {
 		}
 		
 		if result == "" {
-			return nil
+			result = sFaint.Render("(no output)")
 		}
 		
 		return printAbove(result)
 	}
 }
+
+type shellCwdMsg string
 
 func buildEngine(cfg *config.Config, agentName string, reg *tool.Registry) (*engine.Engine, error) {
 	agentConf, err := config.LoadAgent(agentName)
