@@ -18,9 +18,25 @@ type OpenAI struct {
 }
 
 func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Message, tools []ToolDef, onDelta func(StreamDelta)) error {
+	// Convert messages to map format, ensuring content is omitted when empty and tool_calls present
+	msgs := make([]map[string]any, len(messages))
+	for i, m := range messages {
+		msg := map[string]any{"role": m.Role}
+		if m.Content != "" {
+			msg["content"] = m.Content
+		}
+		if len(m.ToolCalls) > 0 {
+			msg["tool_calls"] = m.ToolCalls
+		}
+		if m.ToolCallID != "" {
+			msg["tool_call_id"] = m.ToolCallID
+		}
+		msgs[i] = msg
+	}
+
 	body := map[string]any{
 		"model":    model,
-		"messages": messages,
+		"messages": msgs,
 		"stream":   true,
 	}
 	if len(tools) > 0 {

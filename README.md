@@ -1,11 +1,21 @@
 # GAL-CLI
 
-A multi-agent CLI tool with tool/skill/MCP management and model switching.
+A lightweight, extensible multi-agent CLI tool for LLM workflows — built for developers who want full control.
+
+## Why GAL-CLI?
+
+- **True multi-agent** — switch agents/models mid-conversation, each with isolated tools and prompts
+- **Universal provider support** — OpenAI, Anthropic, DeepSeek, Ollama, Xiaomi, or any OpenAI-compatible API
+- **Extensible by design** — add capabilities via Skills (markdown docs + scripts) or MCP servers, no code changes needed
+- **Agentic loop** — automatic tool execution with streaming output, handles complex multi-step tasks
+- **Session management** — persistent conversations with auto-save, resume anytime with full context
+- **Smart context handling** — automatic LLM-based compression when hitting token limits
+- **Developer-friendly** — pure CLI/TUI, no web UI overhead, works over SSH, integrates with your workflow
 
 ## Features
 
 - **Multi-agent** — define multiple agents with different system prompts, tools, and models; switch on the fly
-- **Multi-provider** — OpenAI, Anthropic, DeepSeek, Ollama (any OpenAI-compatible API)
+- **Multi-provider** — OpenAI, Anthropic, DeepSeek, Ollama, Xiaomi (any OpenAI-compatible API)
 - **Tool calling** — built-in tools (`file_read`, `file_write`, `file_edit`, `file_list`, `grep`, `bash`) with agentic loop
 - **Skills** — user-defined capability packs: prompt injection via `SKILL.md` + auto-registered script tools
 - **MCP** — connect to remote tool servers via HTTP-based Model Context Protocol
@@ -62,6 +72,10 @@ providers:
   ollama:
     type: openai
     base_url: http://localhost:11434/v1
+  xiaomi:
+    type: openai
+    api_key: ${XIAOMI_API_KEY}
+    base_url: https://api.xiaomi.com/v1
 ```
 
 The `type` field selects the adapter: `"anthropic"` for native Anthropic API, anything else uses the OpenAI-compatible adapter.

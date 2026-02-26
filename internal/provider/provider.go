@@ -47,6 +47,7 @@ type DebugFunc func(format string, args ...any)
 func doWithRetry(req *http.Request, payload []byte, dbg DebugFunc) (*http.Response, error) {
 	if dbg != nil {
 		dbg("HTTP %s %s (%d bytes)", req.Method, req.URL.String(), len(payload))
+		dbg("Request Headers: %v", req.Header)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -57,6 +58,7 @@ func doWithRetry(req *http.Request, payload []byte, dbg DebugFunc) (*http.Respon
 	}
 	if dbg != nil {
 		dbg("HTTP RESPONSE: %d %s", resp.StatusCode, resp.Status)
+		dbg("Response Content-Encoding: %s", resp.Header.Get("Content-Encoding"))
 	}
 	if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 		resp.Body.Close()
