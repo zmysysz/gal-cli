@@ -186,6 +186,8 @@ func (m *model) completions() []string {
 		case "/model":
 			cands = append(cands, "list")
 			cands = append(cands, m.eng.Agent.Conf.Models...)
+		case "/shell":
+			cands = append(cands, "--context")
 		}
 		if len(cands) == 0 {
 			return nil
