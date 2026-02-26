@@ -293,7 +293,7 @@ func (r *Registry) registerBuiltins() {
 	// bash
 	r.Register(provider.ToolDef{
 		Name:        "bash",
-		Description: "Execute a bash command and return its output",
+		Description: "Execute a bash command. Interactive commands (requiring user input) are supported.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -304,6 +304,23 @@ func (r *Registry) registerBuiltins() {
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		command, _ := args["command"].(string)
 		cmd := exec.CommandContext(ctx, "bash", "-c", command)
+		
+		// Try to connect to /dev/tty for interactive commands
+		// This allows commands like mysql, psql, sudo, etc. to prompt for input
+		if tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
+			defer tty.Close()
+			cmd.Stdin = tty
+			cmd.Stdout = tty
+			cmd.Stderr = tty
+			
+			// Run interactively - user sees prompts and can input
+			if err := cmd.Run(); err != nil {
+				return fmt.Sprintf("Command failed: %v", err), nil
+			}
+			return "(interactive command completed, check terminal output above)", nil
+		}
+		
+		// Fallback: no TTY available, capture output
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return string(out) + "\n" + err.Error(), nil
