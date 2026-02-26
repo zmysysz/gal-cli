@@ -43,6 +43,12 @@ func Load(dir string) (*Skill, error) {
 		if e.IsDir() {
 			continue
 		}
+		// skip non-executable files
+		info, err := e.Info()
+		if err != nil || info.Mode()&0111 == 0 {
+			fmt.Fprintf(os.Stderr, "⚠ skill %s: skipping non-executable %s\n", name, e.Name())
+			continue
+		}
 		scriptName := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
 		toolName := fmt.Sprintf("skill_%s_%s", name, scriptName)
 		s.ScriptDefs = append(s.ScriptDefs, provider.ToolDef{
@@ -56,6 +62,14 @@ func Load(dir string) (*Skill, error) {
 				},
 			},
 		})
+	}
+	// detect duplicate tool names
+	seen := map[string]bool{}
+	for _, d := range s.ScriptDefs {
+		if seen[d.Name] {
+			fmt.Fprintf(os.Stderr, "⚠ skill %s: duplicate tool name %s (check scripts with same base name)\n", name, d.Name)
+		}
+		seen[d.Name] = true
 	}
 	return s, nil
 }

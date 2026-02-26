@@ -44,6 +44,8 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 ### Provider Config (`~/.gal/gal.yaml`)
 
 ```yaml
+context_limit: 60000  # token threshold for auto context compression (default 60000)
+
 providers:
   openai:
     type: openai
@@ -97,10 +99,14 @@ Model format: `<provider>/<model_id>` (e.g. `openai/gpt-4o`, `deepseek/deepseek-
 ## CLI Commands
 
 ```bash
-gal-cli chat                    # start chat with default agent
+gal-cli chat                    # start chat with default agent (new session)
 gal-cli chat -a <agent>         # start chat with specific agent
+gal-cli chat --session <id>     # resume or create session with given ID
 gal-cli agent list              # list all agents
 gal-cli agent show <name>       # show agent config
+gal-cli session list            # list all saved sessions
+gal-cli session show <id>       # show session metadata
+gal-cli session rm <id>         # delete a session
 gal-cli init                    # initialize ~/.gal/
 ```
 
@@ -154,7 +160,7 @@ MCP tools are auto-discovered and registered as `mcp_<server>_<tool>` (e.g. `mcp
 
 When the LLM decides to call a tool (built-in, skill script, or MCP), gal-cli executes it and feeds the result back automatically. This loop continues until the LLM produces a final text response.
 
-> **Note:** There is currently no iteration limit on the agentic loop. The full conversation history is sent on every round, so context window usage grows with each iteration.
+> **Note:** There is currently no iteration limit on the agentic loop. When the conversation context grows beyond the configured `context_limit` (default 60K tokens), old messages are automatically compressed via an LLM summarization call.
 
 ## Built-in Tools
 

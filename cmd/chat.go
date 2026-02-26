@@ -19,6 +19,7 @@ import (
 	"github.com/gal-cli/gal-cli/internal/config"
 	"github.com/gal-cli/gal-cli/internal/engine"
 	"github.com/gal-cli/gal-cli/internal/provider"
+	"github.com/gal-cli/gal-cli/internal/session"
 	"github.com/gal-cli/gal-cli/internal/tool"
 	"github.com/spf13/cobra"
 )
@@ -26,14 +27,16 @@ import (
 func init() {
 	var agentName string
 	var debug bool
+	var sessionID string
 	chatCmd := &cobra.Command{
 		Use:   "chat",
 		Short: "Start interactive chat",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runChat(agentName, debug)
+			return runChat(agentName, sessionID, debug)
 		},
 	}
 	chatCmd.Flags().StringVarP(&agentName, "agent", "a", "", "Agent name (default: from config)")
+	chatCmd.Flags().StringVar(&sessionID, "session", "", "Session ID to resume or create")
 	chatCmd.Flags().BoolVar(&debug, "debug", false, "")
 	chatCmd.Flags().MarkHidden("debug")
 	rootCmd.AddCommand(chatCmd)
@@ -53,7 +56,7 @@ var (
 	sDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
 
-func banner(agentName, modelName string) string {
+func banner(agentName, modelName, sessionID string) string {
 	logo := sLogo.Render(`
    ██████╗  █████╗ ██╗      █████╗ ██╗  ██╗██╗   ██╗
   ██╔════╝ ██╔══██╗██║     ██╔══██╗╚██╗██╔╝╚██╗ ██╔╝
@@ -62,7 +65,7 @@ func banner(agentName, modelName string) string {
   ╚██████╔╝██║  ██║███████╗██║  ██║██╔╝ ██╗   ██║
    ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝`)
 
-	info := sInfo.Render(fmt.Sprintf("  Agent: %s │ Model: %s", agentName, modelName))
+	info := sInfo.Render(fmt.Sprintf("  Agent: %s │ Model: %s │ Session: %s", agentName, modelName, sessionID))
 	hints := sDim.Render("  /help commands │ /quit exit │ ↑↓ history │ Tab complete")
 
 	return logo + "\n\n" + info + "\n" + hints
@@ -73,6 +76,9 @@ type streamToolMsg string
 type streamToolResultMsg string
 type streamDoneMsg struct{ content string }
 type streamErrMsg struct{ err error }
+type compressStartMsg struct{}
+type compressDoneMsg struct{}
+type compressErrMsg struct{ err error }
 
 // --- input history persistence ---
 
@@ -117,7 +123,7 @@ func saveHistory(hist []string) {
 
 // --- completions ---
 
-var slashCommands = []string{"/agent", "/model", "/clear", "/help", "/quit", "/exit"}
+var slashCommands = []string{"/agent", "/model", "/skill", "/mcp", "/clear", "/help", "/quit", "/exit"}
 
 func (m *model) completions() []string {
 	val := m.input.Value()
@@ -192,6 +198,7 @@ type model struct {
 	eng      *engine.Engine
 	cfg      *config.Config
 	reg      *tool.Registry
+	sess     *session.Session
 	input    textinput.Model
 	spinner  spinner.Model
 	renderer *glamour.TermRenderer
@@ -206,9 +213,10 @@ type model struct {
 	streaming    string
 	streamCh     chan tea.Msg
 	lastStreamLn string // last partial line printed during streaming
+	compressing  bool
 }
 
-func initialModel(eng *engine.Engine, cfg *config.Config, reg *tool.Registry) model {
+func initialModel(eng *engine.Engine, cfg *config.Config, reg *tool.Registry, sess *session.Session) model {
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.Focus()
@@ -222,7 +230,7 @@ func initialModel(eng *engine.Engine, cfg *config.Config, reg *tool.Registry) mo
 	r, _ := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(100))
 
 	m := model{
-		eng: eng, cfg: cfg, reg: reg,
+		eng: eng, cfg: cfg, reg: reg, sess: sess,
 		input: ti, spinner: sp, renderer: r,
 		histIdx: -1, inputHist: loadHistory(),
 	}
@@ -237,6 +245,9 @@ func printAbove(s string) tea.Cmd {
 func (m *model) statusBar() string {
 	if m.waiting {
 		return m.spinner.View() + sFaint.Render(" thinking...")
+	}
+	if m.compressing {
+		return m.spinner.View() + sFaint.Render(" compressing context...")
 	}
 	if comps := m.completions(); len(comps) > 0 {
 		var hints []string
@@ -263,7 +274,7 @@ func (m model) Init() tea.Cmd {
 		m.input.Cursor.SetMode(cursor.CursorStatic),
 		m.spinner.Tick,
 		setIBeamCursor,
-		tea.Println(banner(m.eng.Agent.Conf.Name, m.eng.Agent.CurrentModel)),
+		tea.Println(banner(m.eng.Agent.Conf.Name, m.eng.Agent.CurrentModel, m.sess.ID)),
 	)
 }
 
@@ -375,7 +386,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.streaming = ""
 		m.waiting = false
+		// trigger compression check
+		if m.eng.NeedsCompression() {
+			m.compressing = true
+			return m, tea.Batch(printAbove(rendered), m.compressCmd())
+		}
 		return m, printAbove(rendered)
+
+	case compressDoneMsg:
+		m.compressing = false
+		return m, nil
+
+	case compressErrMsg:
+		m.compressing = false
+		return m, printAbove(sErr.Render("⚠ compress: " + msg.err.Error()))
 
 	case streamErrMsg:
 		m.streaming = ""
@@ -526,6 +550,17 @@ func (m *model) sendCmd(input string) tea.Cmd {
 	return waitForStream(ch)
 }
 
+func (m *model) compressCmd() tea.Cmd {
+	eng := m.eng
+	return func() tea.Msg {
+		err := eng.Compress(context.Background(), nil)
+		if err != nil {
+			return compressErrMsg{err}
+		}
+		return compressDoneMsg{}
+	}
+}
+
 // --- slash commands ---
 
 func (m *model) handleCommand(input string) (string, bool) {
@@ -538,12 +573,36 @@ func (m *model) handleCommand(input string) (string, bool) {
 	case "/clear":
 		m.eng.Clear()
 		return sOK.Render("✔ Conversation cleared"), false
+	case "/skill":
+		skills := m.eng.Agent.Conf.Skills
+		if len(skills) == 0 {
+			return sInfo.Render("No skills loaded"), false
+		}
+		var out []string
+		for _, s := range skills {
+			out = append(out, "  "+s)
+		}
+		return strings.Join(out, "\n"), false
+	case "/mcp":
+		mcps := m.eng.Agent.Conf.MCPs
+		if len(mcps) == 0 {
+			return sInfo.Render("No MCP servers configured"), false
+		}
+		var out []string
+		for name, conf := range mcps {
+			out = append(out, fmt.Sprintf("  %-15s %s", name, conf.URL))
+		}
+		return strings.Join(out, "\n"), false
 	case "/help":
-		return sFaint.Render(`Commands:
+		return sFaint.Render(fmt.Sprintf(`Session: %s
+
+Commands:
   /agent list          List agents
   /agent <name>        Switch agent
   /model list          List models
   /model <name>        Switch model
+  /skill               List loaded skills
+  /mcp                 List MCP servers
   /clear               Clear conversation
   /quit                Exit
 
@@ -551,7 +610,7 @@ Keys:
   ↑/↓                  Input history (on first/last line)
   Shift+Enter          New line
   Tab/Shift+Tab        Autocomplete
-  Mouse wheel          Scroll screen`), false
+  Mouse wheel          Scroll screen`, m.sess.ID)), false
 	case "/agent":
 		if len(parts) < 2 {
 			return sInfo.Render("Agent: " + m.eng.Agent.Conf.Name), false
@@ -576,6 +635,8 @@ Keys:
 			return sErr.Render("✘ " + err.Error()), false
 		}
 		*m.eng = *newEng
+		m.sess.Agent = m.eng.Agent.Conf.Name
+		m.sess.Model = m.eng.Agent.CurrentModel
 		return sOK.Render(fmt.Sprintf("✔ Agent: %s (model: %s)", m.eng.Agent.Conf.Name, m.eng.Agent.CurrentModel)), false
 	case "/model":
 		if len(parts) < 2 {
@@ -610,6 +671,7 @@ Keys:
 		}
 		m.eng.Provider = p
 		m.eng.SwitchModel(newModel)
+		m.sess.Model = m.eng.Agent.CurrentModel
 		return sOK.Render("✔ Model: " + m.eng.Agent.CurrentModel), false
 	default:
 		return sErr.Render("Unknown command: " + cmd + " (type /help)"), false
@@ -618,7 +680,9 @@ Keys:
 
 // --- entry ---
 
-func runChat(agentName string, debug bool) error {
+func runChat(agentName string, sessionID string, debug bool) error {
+	session.Cleanup()
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("run 'gal-cli init' first: %w", err)
@@ -627,19 +691,67 @@ func runChat(agentName string, debug bool) error {
 		agentName = cfg.DefaultAgent
 	}
 	reg := tool.NewRegistry()
+
+	// load or create session
+	var sess *session.Session
+	var resumed bool
+	if sessionID != "" {
+		sess, err = session.Load(sessionID)
+		if err == nil {
+			resumed = true
+			agentName = sess.Agent
+		} else {
+			sess = session.New(sessionID, agentName, "")
+		}
+	} else {
+		sess = session.New(session.NewID(), agentName, "")
+	}
+
 	eng, err := buildEngine(cfg, agentName, reg)
 	if err != nil {
 		return err
 	}
+
+	// restore model from session if resuming
+	if resumed && sess.Model != "" {
+		// switch provider to match saved model
+		mp := strings.SplitN(sess.Model, "/", 2)
+		if len(mp) == 2 {
+			if pConf, ok := cfg.Providers[mp[0]]; ok {
+				var p provider.Provider
+				switch pConf.Type {
+				case "anthropic":
+					p = &provider.Anthropic{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
+				default:
+					p = &provider.OpenAI{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
+				}
+				eng.Provider = p
+				eng.SwitchModel(sess.Model)
+			}
+		}
+		eng.Messages = sess.Messages
+	}
+
+	sess.Model = eng.Agent.CurrentModel
+
+	eng.ContextLimit = cfg.ContextLimit
 	eng.Debug = debug
 	if debug {
 		eng.InitDebug()
 	}
 	defer eng.Close()
-	m := initialModel(eng, cfg, reg)
+
+	m := initialModel(eng, cfg, reg, sess)
 	p := tea.NewProgram(m)
 	_, err = p.Run()
 	fmt.Print("\033[0 q") // restore default cursor
+
+	// save session on exit
+	sess.Messages = eng.Messages
+	sess.Agent = eng.Agent.Conf.Name
+	sess.Model = eng.Agent.CurrentModel
+	sess.Save()
+
 	return err
 }
 

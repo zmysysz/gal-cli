@@ -11,6 +11,7 @@ import (
 
 type Config struct {
 	DefaultAgent string                  `yaml:"default_agent"`
+	ContextLimit int                     `yaml:"context_limit"`
 	Providers    map[string]ProviderConf `yaml:"providers"`
 }
 
@@ -52,6 +53,9 @@ func Load() (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	if cfg.ContextLimit <= 0 {
+		cfg.ContextLimit = 60000
 	}
 	return &cfg, nil
 }

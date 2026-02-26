@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gal-cli/gal-cli/internal/config"
@@ -124,15 +125,17 @@ func Build(conf *config.AgentConf, reg *tool.Registry) (*Agent, error) {
 		a.ToolDefs = append(a.ToolDefs, reg.GetDefs([]string{"load_skills"})...)
 	}
 
-	// MCP servers
+	// MCP servers (best-effort: skip unavailable servers)
 	for mcpName, mcpConf := range conf.MCPs {
 		client := mcp.NewClient(mcpConf)
 		if err := client.Initialize(); err != nil {
-			return nil, fmt.Errorf("agent %s: mcp %s init: %w", conf.Name, mcpName, err)
+			fmt.Fprintf(os.Stderr, "⚠ mcp %s: %v (skipped)\n", mcpName, err)
+			continue
 		}
 		tools, err := client.ListTools()
 		if err != nil {
-			return nil, fmt.Errorf("agent %s: mcp %s list tools: %w", conf.Name, mcpName, err)
+			fmt.Fprintf(os.Stderr, "⚠ mcp %s list tools: %v (skipped)\n", mcpName, err)
+			continue
 		}
 		for _, t := range tools {
 			origName := t.Name

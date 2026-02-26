@@ -13,12 +13,13 @@ import (
 )
 
 type Engine struct {
-	Agent    *agent.Agent
-	Provider provider.Provider
-	Messages []provider.Message
-	Debug    bool
-	debugFile *os.File
-	debugTurn int
+	Agent        *agent.Agent
+	Provider     provider.Provider
+	Messages     []provider.Message
+	ContextLimit int
+	Debug        bool
+	debugFile    *os.File
+	debugTurn    int
 }
 
 func New(a *agent.Agent, p provider.Provider) *Engine {
@@ -80,8 +81,13 @@ func (e *Engine) SendWithCallbacks(ctx context.Context, userMsg string, onText f
 	e.debugLog("========== TURN %d ==========", turn)
 	e.debugLog("USER: %s", userMsg)
 
+	const maxRounds = 50
+
 	for {
 		round++
+		if round > maxRounds {
+			return fmt.Errorf("agentic loop exceeded %d rounds, stopping", maxRounds)
+		}
 		var fullContent string
 		var toolCalls []provider.ToolCall
 
@@ -165,4 +171,128 @@ func (e *Engine) Close() {
 	if e.debugFile != nil {
 		e.debugFile.Close()
 	}
+}
+
+// estimateTokens estimates token count from character length.
+func estimateTokens(msgs []provider.Message) int {
+	total := 0
+	for _, m := range msgs {
+		total += len(m.Content)
+		for _, tc := range m.ToolCalls {
+			total += len(tc.Function.Name) + len(tc.Function.Arguments)
+		}
+	}
+	return int(float64(total) / 2.5)
+}
+
+// NeedsCompression returns true if estimated tokens exceed the context limit.
+func (e *Engine) NeedsCompression() bool {
+	if e.ContextLimit <= 0 {
+		return false
+	}
+	return estimateTokens(e.Messages) > e.ContextLimit
+}
+
+// Compress summarizes old messages to reduce context size.
+// onStatus is called with status text (e.g. for TUI display).
+func (e *Engine) Compress(ctx context.Context, onStatus func(string)) error {
+	if !e.NeedsCompression() {
+		return nil
+	}
+	if onStatus != nil {
+		onStatus("compressing context...")
+	}
+	defer func() {
+		if onStatus != nil {
+			onStatus("")
+		}
+	}()
+
+	// skip system message at index 0
+	msgs := e.Messages[1:]
+	targetTokens := int(float64(e.ContextLimit) * 0.8)
+
+	// find compress boundary: accumulate from oldest, respect tool_call groups
+	accum := 0
+	cutIdx := 0 // index in msgs (not e.Messages)
+	for cutIdx < len(msgs) {
+		m := msgs[cutIdx]
+		mtokens := int(float64(len(m.Content)) / 2.5)
+		for _, tc := range m.ToolCalls {
+			mtokens += int(float64(len(tc.Function.Name)+len(tc.Function.Arguments)) / 2.5)
+		}
+
+		if accum+mtokens > targetTokens {
+			break
+		}
+		accum += mtokens
+		cutIdx++
+
+		// if this was an assistant with tool_calls, include all following tool results
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			for cutIdx < len(msgs) && msgs[cutIdx].Role == "tool" {
+				tm := msgs[cutIdx]
+				accum += int(float64(len(tm.Content)) / 2.5)
+				cutIdx++
+			}
+		}
+	}
+
+	if cutIdx == 0 {
+		return nil
+	}
+
+	compressZone := msgs[:cutIdx]
+	keepZone := msgs[cutIdx:]
+
+	// build compression request (isolated from conversation)
+	compressMessages := []provider.Message{
+		{Role: "system", Content: "Summarize the following conversation concisely, preserving key decisions, code changes, file paths, and technical details. Output in the same language as the conversation."},
+	}
+	// pack compress zone as a single user message
+	var sb strings.Builder
+	for _, m := range compressZone {
+		switch {
+		case m.Role == "user":
+			sb.WriteString("User: " + m.Content + "\n\n")
+		case m.Role == "assistant" && m.Content != "":
+			sb.WriteString("Assistant: " + m.Content + "\n\n")
+		case m.Role == "assistant" && len(m.ToolCalls) > 0:
+			for _, tc := range m.ToolCalls {
+				sb.WriteString(fmt.Sprintf("Assistant called tool %s(%s)\n", tc.Function.Name, tc.Function.Arguments))
+			}
+			sb.WriteString("\n")
+		case m.Role == "tool":
+			preview := m.Content
+			if len(preview) > 500 {
+				preview = preview[:500] + "...(truncated)"
+			}
+			sb.WriteString("Tool result: " + preview + "\n\n")
+		}
+	}
+	compressMessages = append(compressMessages, provider.Message{Role: "user", Content: sb.String()})
+
+	e.debugLog("COMPRESS: zone=%d msgs, keep=%d msgs, estimated_tokens=%d", len(compressZone), len(keepZone), accum)
+
+	// call LLM for summary
+	var summary string
+	err := e.Provider.ChatStream(ctx, e.ModelID(), compressMessages, nil, func(d provider.StreamDelta) {
+		summary += d.Content
+	})
+	if err != nil {
+		e.debugLog("COMPRESS ERROR: %v", err)
+		return err
+	}
+
+	e.debugLog("COMPRESS DONE: summary=%d chars", len(summary))
+
+	// rebuild messages: system + compressed summary + keep zone
+	newMessages := []provider.Message{
+		e.Messages[0], // original system prompt
+		{Role: "system", Content: "[Compressed context from earlier conversation]\n" + summary},
+	}
+	newMessages = append(newMessages, keepZone...)
+	e.Messages = newMessages
+
+	return nil
 }
