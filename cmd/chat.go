@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/cursor"
@@ -358,8 +359,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyTab:
 			comps := m.completions()
 			if len(comps) > 0 {
-				m.compIdx = (m.compIdx + 1) % len(comps)
+				// First tab: apply current (index 0)
+				// Subsequent tabs: cycle through
 				m.applyCompletion()
+				m.compIdx = (m.compIdx + 1) % len(comps)
 			}
 			return m, nil
 		case tea.KeyShiftTab:
@@ -964,11 +967,23 @@ func matchCommands(prefix string, limit int) []string {
 			if strings.HasPrefix(name, prefix) && !seen[name] {
 				seen[name] = true
 				matches = append(matches, name)
-				if len(matches) >= limit {
-					return matches
-				}
 			}
 		}
+	}
+	
+	// Sort by relevance: shorter names (better match) first
+	sort.Slice(matches, func(i, j int) bool {
+		// Calculate match score: prefix_len / total_len
+		scoreI := float64(len(prefix)) / float64(len(matches[i]))
+		scoreJ := float64(len(prefix)) / float64(len(matches[j]))
+		if scoreI != scoreJ {
+			return scoreI > scoreJ // Higher score first
+		}
+		return matches[i] < matches[j] // Alphabetical as tiebreaker
+	})
+	
+	if len(matches) > limit {
+		matches = matches[:limit]
 	}
 	return matches
 }
@@ -1006,10 +1021,30 @@ func matchPaths(prefix string, limit int) []string {
 				fullPath = strings.TrimPrefix(fullPath, "./")
 			}
 			matches = append(matches, fullPath)
-			if len(matches) >= limit {
-				return matches
-			}
 		}
+	}
+	
+	// Sort by relevance: shorter names (better match) first
+	sort.Slice(matches, func(i, j int) bool {
+		baseI := filepath.Base(matches[i])
+		baseJ := filepath.Base(matches[j])
+		// Calculate match score
+		scoreI := float64(len(base)) / float64(len(baseI))
+		scoreJ := float64(len(base)) / float64(len(baseJ))
+		if scoreI != scoreJ {
+			return scoreI > scoreJ
+		}
+		// Directories first, then alphabetical
+		isDirI := strings.HasSuffix(matches[i], "/")
+		isDirJ := strings.HasSuffix(matches[j], "/")
+		if isDirI != isDirJ {
+			return isDirI
+		}
+		return matches[i] < matches[j]
+	})
+	
+	if len(matches) > limit {
+		matches = matches[:limit]
 	}
 	return matches
 }
