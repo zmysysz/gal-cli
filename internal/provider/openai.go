@@ -69,11 +69,12 @@ func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Messag
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
 		chunkCount++
-		data := strings.TrimPrefix(line, "data: ")
+		data := strings.TrimPrefix(line, "data:")
+		data = strings.TrimSpace(data)
 		if data == "[DONE]" {
 			if o.Debug != nil {
 				o.Debug("STREAM DONE: %d chunks received", chunkCount)

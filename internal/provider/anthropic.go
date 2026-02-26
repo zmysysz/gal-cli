@@ -123,10 +123,11 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 		if a.Debug != nil {
 			a.Debug("SSE RAW: %s", line)
 		}
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
+		data := strings.TrimPrefix(line, "data:")
+		data = strings.TrimSpace(data)
 
 		var event struct {
 			Type  string `json:"type"`
