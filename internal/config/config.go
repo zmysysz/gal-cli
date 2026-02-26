@@ -36,7 +36,21 @@ type AgentConf struct {
 	DefaultModel string   `yaml:"default_model"`
 	Tools        []string `yaml:"tools"`
 	Skills       []string              `yaml:"skills"`
-	MCPs         map[string]MCPConf    `yaml:"mcps"`
+	MCPs         MCPMap                `yaml:"mcps"`
+}
+
+// MCPMap is a map that tolerates being set to an empty YAML sequence ([]).
+type MCPMap map[string]MCPConf
+
+func (m *MCPMap) UnmarshalYAML(unmarshal func(any) error) error {
+	var raw map[string]MCPConf
+	if err := unmarshal(&raw); err != nil {
+		// if it fails (e.g. `mcps: []`), treat as empty
+		*m = MCPMap{}
+		return nil
+	}
+	*m = MCPMap(raw)
+	return nil
 }
 
 func GalDir() string {
