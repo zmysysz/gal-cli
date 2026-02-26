@@ -112,25 +112,59 @@ Model format: `<provider>/<model_id>` (e.g. `openai/gpt-4o`, `deepseek/deepseek-
 
 ## CLI Commands
 
+### Interactive Mode
+
 ```bash
 gal-cli chat                    # start chat with default agent (new session)
 gal-cli chat -a <agent>         # start chat with specific agent
 gal-cli chat --session <id>     # resume or create session with given ID
+```
+
+### Non-Interactive Mode
+
+Use `--message` (or `-m`) to run in non-interactive mode: send one message and exit.
+
+```bash
+# Basic usage
+gal-cli chat -m "your message"
+
+# Read from file
+gal-cli chat -m @prompt.txt
+
+# Read from stdin (pipe-friendly)
+echo "hello" | gal-cli chat -m -
+cat code.go | gal-cli chat -m -
+
+# With agent/model/session
+gal-cli chat -a coder -m "write a function"
+gal-cli chat --model openai/gpt-4o -m "analyze"
+gal-cli chat --session task1 -m "continue the task"
+
+# Output: stdout = LLM response, stderr = tool calls
+gal-cli chat -m "summarize" < input.txt > output.txt
+```
+
+### Management Commands
+
+```bash
 gal-cli agent list              # list all agents
 gal-cli agent show <name>       # show agent config
 gal-cli session list            # list all saved sessions
 gal-cli session show <id>       # show session metadata
 gal-cli session rm <id>         # delete a session
+gal-cli tool list               # list all available tools
 gal-cli init                    # initialize ~/.gal/
 ```
 
-### In-Chat Commands
+### In-Chat Commands (Interactive Mode)
 
 ```
 /agent <name>       switch agent
 /agent list         list agents
 /model <name>       switch model
 /model list         list models
+/skill              list loaded skills
+/mcp                list MCP servers
 /clear              clear conversation
 /help               show help
 /quit               exit
