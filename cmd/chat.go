@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -143,10 +144,17 @@ func saveHistory(hist []string) {
 
 // --- completions ---
 
-var slashCommands = []string{"/agent", "/model", "/skill", "/mcp", "/clear", "/help", "/quit", "/exit"}
+var slashCommands = []string{"/agent", "/model", "/skill", "/mcp", "/shell", "/chat", "/clear", "/help", "/quit", "/exit"}
 
 func (m *model) completions() []string {
 	val := m.input.Value()
+	
+	// shell mode completions
+	if m.shellMode && !strings.HasPrefix(val, "/") {
+		return m.shellCompletions()
+	}
+	
+	// slash command completions
 	if !strings.HasPrefix(val, "/") {
 		return nil
 	}
@@ -234,6 +242,9 @@ type model struct {
 	streamCh     chan tea.Msg
 	lastStreamLn string // last partial line printed during streaming
 	compressing  bool
+	// shell mode
+	shellMode bool
+	shellCwd  string
 }
 
 func initialModel(eng *engine.Engine, cfg *config.Config, reg *tool.Registry, sess *session.Session) model {
@@ -249,10 +260,12 @@ func initialModel(eng *engine.Engine, cfg *config.Config, reg *tool.Registry, se
 
 	r, _ := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(100))
 
+	cwd, _ := os.Getwd()
 	m := model{
 		eng: eng, cfg: cfg, reg: reg, sess: sess,
 		input: ti, spinner: sp, renderer: r,
 		histIdx: -1, inputHist: loadHistory(),
+		shellCwd: cwd,
 	}
 	return m
 }
@@ -279,6 +292,9 @@ func (m *model) statusBar() string {
 			}
 		}
 		return sHint.Render("Tab: ") + strings.Join(hints, sHint.Render("  "))
+	}
+	if m.shellMode {
+		return sTool.Render("[Shell Mode] ") + sFaint.Render(m.shellCwd)
 	}
 	return sBar.Render(fmt.Sprintf("%s │ %s", m.eng.Agent.Conf.Name, m.eng.Agent.CurrentModel))
 }
@@ -378,6 +394,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			// shell mode: execute command directly
+			if m.shellMode {
+				return m, m.executeShellCmd(input)
+			}
+			// chat mode: send to LLM
 			m.waiting = true
 			return m, tea.Batch(printAbove(sPrompt.Render("▶ ")+input), m.sendCmd(input))
 		}
@@ -592,6 +613,15 @@ func (m *model) handleCommand(input string) (string, bool) {
 	cmd := parts[0]
 
 	switch cmd {
+	case "/shell":
+		m.shellMode = true
+		return sOK.Render("✔ Entered shell mode (type '/chat' to return)"), false
+	case "/chat":
+		if m.shellMode {
+			m.shellMode = false
+			return sOK.Render("✔ Returned to chat mode"), false
+		}
+		return sErr.Render("Already in chat mode"), false
 	case "/quit", "/exit":
 		return "", true
 	case "/clear":
@@ -632,6 +662,8 @@ Commands:
   /model <name>        Switch model
   /skill               List loaded skills
   /mcp                 List MCP servers
+  /shell               Enter shell mode (execute commands with tab completion)
+  /chat                Return to chat mode (from shell)
   /clear               Clear conversation
   /quit                Exit
 
@@ -640,6 +672,12 @@ Keys:
   Shift+Enter          New line
   Tab/Shift+Tab        Autocomplete
   Mouse wheel          Scroll screen
+
+Shell Mode:
+  - Tab completion for commands and paths (max 5 suggestions)
+  - cd command changes directory
+  - All bash features (pipes, redirects, etc.)
+  - Type '/chat' to return to chat mode
 
 Non-Interactive Mode Examples:
   gal-cli chat -m "your message"
@@ -868,6 +906,142 @@ func readMessage(message string) (string, error) {
 
 	// direct string
 	return message, nil
+}
+
+// --- shell mode functions ---
+
+func (m *model) shellCompletions() []string {
+	val := m.input.Value()
+	parts := strings.Fields(val)
+	
+	if len(parts) == 0 {
+		return nil
+	}
+	
+	// First word: complete command names
+	if len(parts) == 1 && !strings.HasSuffix(val, " ") {
+		return matchCommands(parts[0], 5)
+	}
+	
+	// Other words: complete paths
+	lastArg := parts[len(parts)-1]
+	if strings.HasSuffix(val, " ") {
+		lastArg = ""
+	}
+	return matchPaths(lastArg, 5)
+}
+
+func matchCommands(prefix string, limit int) []string {
+	pathEnv := os.Getenv("PATH")
+	if pathEnv == "" {
+		return nil
+	}
+	
+	seen := make(map[string]bool)
+	var matches []string
+	
+	for _, dir := range strings.Split(pathEnv, ":") {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if strings.HasPrefix(name, prefix) && !seen[name] {
+				seen[name] = true
+				matches = append(matches, name)
+				if len(matches) >= limit {
+					return matches
+				}
+			}
+		}
+	}
+	return matches
+}
+
+func matchPaths(prefix string, limit int) []string {
+	dir := "."
+	base := prefix
+	
+	if strings.Contains(prefix, "/") {
+		dir = filepath.Dir(prefix)
+		base = filepath.Base(prefix)
+	}
+	
+	// Expand ~ to home directory
+	if strings.HasPrefix(dir, "~") {
+		home, _ := os.UserHomeDir()
+		dir = strings.Replace(dir, "~", home, 1)
+	}
+	
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	
+	var matches []string
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, base) {
+			fullPath := filepath.Join(dir, name)
+			if e.IsDir() {
+				fullPath += "/"
+			}
+			// Make path relative if it was relative
+			if !strings.HasPrefix(prefix, "/") && !strings.HasPrefix(prefix, "~") {
+				fullPath = strings.TrimPrefix(fullPath, "./")
+			}
+			matches = append(matches, fullPath)
+			if len(matches) >= limit {
+				return matches
+			}
+		}
+	}
+	return matches
+}
+
+func (m *model) executeShellCmd(input string) tea.Cmd {
+	return func() tea.Msg {
+		// Handle cd command specially
+		if strings.HasPrefix(input, "cd ") {
+			path := strings.TrimSpace(strings.TrimPrefix(input, "cd"))
+			if path == "" {
+				home, _ := os.UserHomeDir()
+				path = home
+			}
+			if strings.HasPrefix(path, "~") {
+				home, _ := os.UserHomeDir()
+				path = strings.Replace(path, "~", home, 1)
+			}
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(m.shellCwd, path)
+			}
+			if err := os.Chdir(path); err != nil {
+				return printAbove(sErr.Render("✘ " + err.Error()))
+			}
+			m.shellCwd, _ = os.Getwd()
+			return printAbove(sFaint.Render(m.shellCwd))
+		}
+		
+		// Execute command
+		cmd := exec.Command("bash", "-c", input)
+		cmd.Dir = m.shellCwd
+		out, err := cmd.CombinedOutput()
+		
+		result := string(out)
+		if err != nil && result == "" {
+			result = err.Error()
+		}
+		
+		if result == "" {
+			return nil
+		}
+		
+		return printAbove(result)
+	}
 }
 
 func buildEngine(cfg *config.Config, agentName string, reg *tool.Registry) (*engine.Engine, error) {
