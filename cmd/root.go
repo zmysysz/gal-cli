@@ -14,7 +14,7 @@ var rootCmd = &cobra.Command{
 
 Features:
   • Multi-agent with on-the-fly switching
-  • Universal provider support (OpenAI, Anthropic, DeepSeek, Ollama, Xiaomi)
+  • Universal provider support (OpenAI, Anthropic, DeepSeek, Ollama, ZhipuAI)
   • Extensible via Skills and MCP servers
   • Interactive and non-interactive modes
   • Session management with auto-save

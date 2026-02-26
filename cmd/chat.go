@@ -389,7 +389,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.inputHist = append(m.inputHist, input)
-			if strings.HasPrefix(input, "/") {
+			// Check if it's a slash command (e.g., /help) vs a path (e.g., /bin/ls)
+			// Slash commands: start with / followed by letters, no second /
+			isSlashCmd := strings.HasPrefix(input, "/") && len(input) > 1 && 
+				!strings.Contains(input[1:], "/") && 
+				((input[1] >= 'a' && input[1] <= 'z') || (input[1] >= 'A' && input[1] <= 'Z'))
+			
+			if isSlashCmd {
 				if input == "/quit" || input == "/exit" {
 					saveHistory(m.inputHist)
 					return m, tea.Quit
@@ -487,6 +493,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = ""
 		m.waiting = false
 		return m, printAbove(sErr.Render("✘ " + msg.err.Error()))
+	
+	case string:
+		// Handle string messages from handleCommand
+		if msg != "" {
+			return m, printAbove(msg)
+		}
 	}
 
 	prev := m.input.Value()
@@ -717,6 +729,8 @@ Keys:
 
 Shell Mode:
   - Tab completion for commands and paths (max 5 suggestions)
+  - Supports bash aliases (ll, la, etc.) from ~/.bashrc
+  - Full path commands work (/bin/ls, /usr/bin/python, etc.)
   - Use '/shell --context' to make LLM aware of command outputs
   - cd command changes directory
   - All bash features (pipes, redirects, etc.)
@@ -1103,8 +1117,9 @@ func (m *model) executeShellCmd(input string) tea.Cmd {
 		}
 		
 		// Execute command and load aliases from .bashrc
-		// Use a wrapper script that sources .bashrc and enables aliases
+		// Set PS1 to trick .bashrc into thinking it's interactive
 		wrappedCmd := fmt.Sprintf(`
+			export PS1='$ '
 			shopt -s expand_aliases
 			if [ -f ~/.bashrc ]; then source ~/.bashrc; fi
 			if [ -f ~/.bash_aliases ]; then source ~/.bash_aliases; fi

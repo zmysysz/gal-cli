@@ -5,7 +5,7 @@ A lightweight, extensible multi-agent CLI tool for LLM workflows — built for d
 ## Why GAL-CLI?
 
 - **True multi-agent** — switch agents/models mid-conversation, each with isolated tools and prompts
-- **Universal provider support** — OpenAI, Anthropic, DeepSeek, Ollama, Xiaomi, or any OpenAI-compatible API
+- **Universal provider support** — OpenAI, Anthropic, DeepSeek, Ollama, ZhipuAI, or any OpenAI-compatible API
 - **Extensible by design** — add capabilities via Skills (markdown docs + scripts) or MCP servers, no code changes needed
 - **Agentic loop** — automatic tool execution with streaming output, handles complex multi-step tasks
 - **Session management** — persistent conversations with auto-save, resume anytime with full context
@@ -15,7 +15,7 @@ A lightweight, extensible multi-agent CLI tool for LLM workflows — built for d
 ## Features
 
 - **Multi-agent** — define multiple agents with different system prompts, tools, and models; switch on the fly
-- **Multi-provider** — OpenAI, Anthropic, DeepSeek, Ollama, Xiaomi (any OpenAI-compatible API)
+- **Multi-provider** — OpenAI, Anthropic, DeepSeek, Ollama, ZhipuAI (any OpenAI-compatible API)
 - **Tool calling** — built-in tools (`file_read`, `file_write`, `file_edit`, `file_list`, `grep`, `bash`) with agentic loop
 - **Skills** — user-defined capability packs: prompt injection via `SKILL.md` + auto-registered script tools
 - **MCP** — connect to remote tool servers via HTTP-based Model Context Protocol
@@ -69,13 +69,13 @@ providers:
     type: openai
     api_key: ${DEEPSEEK_API_KEY}
     base_url: https://api.deepseek.com/v1
+  zhipu:
+    type: openai
+    api_key: ${ZHIPU_API_KEY}
+    base_url: https://open.bigmodel.cn/api/paas/v4
   ollama:
     type: openai
     base_url: http://localhost:11434/v1
-  xiaomi:
-    type: openai
-    api_key: ${XIAOMI_API_KEY}
-    base_url: https://api.xiaomi.com/v1
 ```
 
 The `type` field selects the adapter: `"anthropic"` for native Anthropic API, anything else uses the OpenAI-compatible adapter.
@@ -165,10 +165,38 @@ gal-cli init                    # initialize ~/.gal/
 /model list         list models
 /skill              list loaded skills
 /mcp                list MCP servers
+/shell              enter shell mode
+/shell --context    enter shell mode with LLM context
+/chat               return to chat mode (from shell)
 /clear              clear conversation
 /help               show help
 /quit               exit
 ```
+
+## Shell Mode
+
+Shell mode provides a lightweight terminal interface within the chat session:
+
+```bash
+# Enter shell mode
+/shell
+
+# Enter shell mode with LLM context (command outputs visible to LLM)
+/shell --context
+```
+
+**Features:**
+- Tab completion for commands and file paths
+- Bash alias support (`ll`, `la`, etc. from `~/.bashrc`)
+- Full path commands work (`/bin/ls`, `/usr/bin/python`)
+- Directory navigation with `cd`
+- All bash features (pipes, redirects, variables, etc.)
+- Command history with ↑/↓ arrows
+
+**Context Mode:**
+When using `/shell --context`, command outputs are added to the conversation history, allowing the LLM to see and respond to command results. Useful for debugging, analysis, or iterative tasks.
+
+Return to chat mode with `/chat`.
 
 ## Skills
 

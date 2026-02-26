@@ -33,6 +33,13 @@ providers:
     models:
       - deepseek-chat
       - deepseek-reasoner
+  zhipu:
+    type: openai
+    api_key: ${ZHIPU_API_KEY}
+    base_url: https://open.bigmodel.cn/api/paas/v4
+    models:
+      - glm-4-plus
+      - glm-4-flash
   ollama:
     type: openai
     base_url: http://localhost:11434/v1
@@ -53,6 +60,8 @@ models:
   - anthropic/claude-haiku-4-20250414
   - deepseek/deepseek-chat
   - deepseek/deepseek-reasoner
+  - zhipu/glm-4-plus
+  - zhipu/glm-4-flash
   - ollama/llama3
 default_model: openai/gpt-4o
 
