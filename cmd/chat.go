@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,17 +27,21 @@ import (
 
 func init() {
 	var agentName string
+	var modelName string
 	var debug bool
 	var sessionID string
+	var message string
 	chatCmd := &cobra.Command{
 		Use:   "chat",
-		Short: "Start interactive chat",
+		Short: "Start chat (interactive or non-interactive with -m)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runChat(agentName, sessionID, debug)
+			return runChat(agentName, modelName, sessionID, message, debug)
 		},
 	}
 	chatCmd.Flags().StringVarP(&agentName, "agent", "a", "", "Agent name (default: from config)")
+	chatCmd.Flags().StringVar(&modelName, "model", "", "Model to use (overrides agent default)")
 	chatCmd.Flags().StringVar(&sessionID, "session", "", "Session ID to resume or create")
+	chatCmd.Flags().StringVarP(&message, "message", "m", "", "Non-interactive mode: message to send (use @file or - for stdin)")
 	chatCmd.Flags().BoolVar(&debug, "debug", false, "")
 	chatCmd.Flags().MarkHidden("debug")
 	rootCmd.AddCommand(chatCmd)
@@ -689,7 +694,7 @@ Keys:
 
 // --- entry ---
 
-func runChat(agentName string, sessionID string, debug bool) error {
+func runChat(agentName, modelName, sessionID, message string, debug bool) error {
 	session.Cleanup()
 
 	cfg, err := config.Load()
@@ -741,6 +746,24 @@ func runChat(agentName string, sessionID string, debug bool) error {
 		eng.Messages = sess.Messages
 	}
 
+	// override model if specified via flag
+	if modelName != "" {
+		mp := strings.SplitN(modelName, "/", 2)
+		if len(mp) == 2 {
+			if pConf, ok := cfg.Providers[mp[0]]; ok {
+				var p provider.Provider
+				switch pConf.Type {
+				case "anthropic":
+					p = &provider.Anthropic{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
+				default:
+					p = &provider.OpenAI{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
+				}
+				eng.Provider = p
+				eng.SwitchModel(modelName)
+			}
+		}
+	}
+
 	sess.Model = eng.Agent.CurrentModel
 
 	eng.ContextLimit = cfg.ContextLimit
@@ -750,6 +773,12 @@ func runChat(agentName string, sessionID string, debug bool) error {
 	}
 	defer eng.Close()
 
+	// non-interactive mode
+	if message != "" {
+		return runOnce(eng, sess, message, debug)
+	}
+
+	// interactive mode
 	m := initialModel(eng, cfg, reg, sess)
 	p := tea.NewProgram(m)
 	_, err = p.Run()
@@ -762,6 +791,60 @@ func runChat(agentName string, sessionID string, debug bool) error {
 	sess.Save()
 
 	return err
+}
+
+func runOnce(eng *engine.Engine, sess *session.Session, message string, debug bool) error {
+	// read message from various sources
+	content, err := readMessage(message)
+	if err != nil {
+		return fmt.Errorf("failed to read message: %w", err)
+	}
+
+	// simple callbacks: stdout for LLM, stderr for tools
+	onText := func(s string) {
+		fmt.Print(s)
+	}
+	onToolCall := func(name string) {
+		fmt.Fprintf(os.Stderr, "🔧 %s\n", name)
+	}
+
+	ctx := context.Background()
+	err = eng.SendWithCallbacks(ctx, content, onText, onToolCall, nil)
+
+	// save session
+	sess.Messages = eng.Messages
+	sess.Agent = eng.Agent.Conf.Name
+	sess.Model = eng.Agent.CurrentModel
+	sess.Save()
+
+	if err == nil {
+		fmt.Println() // trailing newline
+	}
+	return err
+}
+
+func readMessage(message string) (string, error) {
+	// stdin
+	if message == "-" {
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
+
+	// file
+	if strings.HasPrefix(message, "@") {
+		path := message[1:]
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
+
+	// direct string
+	return message, nil
 }
 
 func buildEngine(cfg *config.Config, agentName string, reg *tool.Registry) (*engine.Engine, error) {
