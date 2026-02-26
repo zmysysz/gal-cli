@@ -819,6 +819,7 @@ func runOnce(eng *engine.Engine, sess *session.Session, message string, debug bo
 
 	if err == nil {
 		fmt.Println() // trailing newline
+		fmt.Fprintf(os.Stderr, "\n💾 Session: %s (resume with --session %s)\n", sess.ID, sess.ID)
 	}
 	return err
 }
