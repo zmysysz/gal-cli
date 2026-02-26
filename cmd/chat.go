@@ -244,8 +244,9 @@ type model struct {
 	lastStreamLn string // last partial line printed during streaming
 	compressing  bool
 	// shell mode
-	shellMode bool
-	shellCwd  string
+	shellMode        bool
+	shellCwd         string
+	shellWithContext bool // whether to add shell output to LLM context
 }
 
 func initialModel(eng *engine.Engine, cfg *config.Config, reg *tool.Registry, sess *session.Session) model {
@@ -295,7 +296,11 @@ func (m *model) statusBar() string {
 		return sHint.Render("Tab: ") + strings.Join(hints, sHint.Render("  "))
 	}
 	if m.shellMode {
-		return sTool.Render("[Shell Mode] ") + sFaint.Render(m.shellCwd)
+		modeLabel := "[Shell Mode]"
+		if m.shellWithContext {
+			modeLabel = "[Shell+Context]"
+		}
+		return sTool.Render(modeLabel+" ") + sFaint.Render(m.shellCwd)
 	}
 	return sBar.Render(fmt.Sprintf("%s │ %s", m.eng.Agent.Conf.Name, m.eng.Agent.CurrentModel))
 }
@@ -455,6 +460,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case shellOutputMsg:
 		return m, printAbove(string(msg))
+
+	case shellResultMsg:
+		// Add to context if requested
+		if msg.withContext {
+			contextMsg := fmt.Sprintf("Shell command: %s\nOutput:\n%s", msg.command, msg.output)
+			m.eng.Messages = append(m.eng.Messages, provider.Message{
+				Role:    "user",
+				Content: contextMsg,
+			})
+		}
+		return m, printAbove(msg.output)
 
 	case streamErrMsg:
 		m.streaming = ""
@@ -629,10 +645,17 @@ func (m *model) handleCommand(input string) (string, bool) {
 	switch cmd {
 	case "/shell":
 		m.shellMode = true
+		m.shellWithContext = false
+		// Check for --context flag
+		if len(parts) > 1 && parts[1] == "--context" {
+			m.shellWithContext = true
+			return sOK.Render("✔ Entered shell mode with context (output will be added to conversation)"), false
+		}
 		return sOK.Render("✔ Entered shell mode (type '/chat' to return)"), false
 	case "/chat":
 		if m.shellMode {
 			m.shellMode = false
+			m.shellWithContext = false
 			return sOK.Render("✔ Returned to chat mode"), false
 		}
 		return sErr.Render("Already in chat mode"), false
@@ -677,6 +700,7 @@ Commands:
   /skill               List loaded skills
   /mcp                 List MCP servers
   /shell               Enter shell mode (execute commands with tab completion)
+  /shell --context     Enter shell mode and add output to conversation context
   /chat                Return to chat mode (from shell)
   /clear               Clear conversation
   /quit                Exit
@@ -689,6 +713,7 @@ Keys:
 
 Shell Mode:
   - Tab completion for commands and paths (max 5 suggestions)
+  - Use '/shell --context' to make LLM aware of command outputs
   - cd command changes directory
   - All bash features (pipes, redirects, etc.)
   - Type '/chat' to return to chat mode
@@ -1087,12 +1112,21 @@ func (m *model) executeShellCmd(input string) tea.Cmd {
 			result = sFaint.Render("(no output)")
 		}
 		
-		return shellOutputMsg(result)
+		return shellResultMsg{
+			command:     input,
+			output:      result,
+			withContext: m.shellWithContext,
+		}
 	}
 }
 
 type shellCwdMsg string
 type shellOutputMsg string
+type shellResultMsg struct {
+	command     string
+	output      string
+	withContext bool
+}
 
 func buildEngine(cfg *config.Config, agentName string, reg *tool.Registry) (*engine.Engine, error) {
 	agentConf, err := config.LoadAgent(agentName)
