@@ -120,6 +120,9 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		if a.Debug != nil {
+			a.Debug("SSE RAW: %s", line)
+		}
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
