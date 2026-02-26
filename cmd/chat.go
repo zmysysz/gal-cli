@@ -396,7 +396,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// shell mode: execute command directly
 			if m.shellMode {
-				return m, m.executeShellCmd(input)
+				// Show command being executed
+				return m, tea.Batch(
+					printAbove(sTool.Render("$ ")+input),
+					m.executeShellCmd(input),
+				)
 			}
 			// chat mode: send to LLM
 			m.waiting = true
@@ -445,6 +449,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case compressErrMsg:
 		m.compressing = false
 		return m, printAbove(sErr.Render("⚠ compress: " + msg.err.Error()))
+
+	case shellOutputMsg:
+		return m, printAbove(string(msg))
 
 	case streamErrMsg:
 		m.streaming = ""
@@ -1024,9 +1031,9 @@ func (m *model) executeShellCmd(input string) tea.Cmd {
 				path = filepath.Join(m.shellCwd, path)
 			}
 			if err := os.Chdir(path); err != nil {
-				return printAbove(sErr.Render("✘ " + err.Error()))
+				return shellOutputMsg(sErr.Render("✘ " + err.Error()))
 			}
-			// Update shellCwd - this needs to be done in Update, not here
+			// Update shellCwd
 			newCwd, _ := os.Getwd()
 			return shellCwdMsg(newCwd)
 		}
@@ -1045,11 +1052,12 @@ func (m *model) executeShellCmd(input string) tea.Cmd {
 			result = sFaint.Render("(no output)")
 		}
 		
-		return printAbove(result)
+		return shellOutputMsg(result)
 	}
 }
 
 type shellCwdMsg string
+type shellOutputMsg string
 
 func buildEngine(cfg *config.Config, agentName string, reg *tool.Registry) (*engine.Engine, error) {
 	agentConf, err := config.LoadAgent(agentName)
