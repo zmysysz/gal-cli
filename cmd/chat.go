@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -143,7 +144,7 @@ func saveHistory(hist []string) {
 
 // --- completions ---
 
-var slashCommands = []string{"/agent", "/model", "/skill", "/mcp", "/clear", "/help", "/quit", "/exit"}
+var slashCommands = []string{"/agent", "/model", "/skill", "/mcp", "/shell", "/clear", "/help", "/quit", "/exit"}
 
 func (m *model) completions() []string {
 	val := m.input.Value()
@@ -234,6 +235,8 @@ type model struct {
 	streamCh     chan tea.Msg
 	lastStreamLn string // last partial line printed during streaming
 	compressing  bool
+	// shell mode
+	shellMode bool
 }
 
 func initialModel(eng *engine.Engine, cfg *config.Config, reg *tool.Registry, sess *session.Session) model {
@@ -594,6 +597,10 @@ func (m *model) handleCommand(input string) (string, bool) {
 	switch cmd {
 	case "/quit", "/exit":
 		return "", true
+	case "/shell":
+		// Signal to enter shell mode
+		m.shellMode = true
+		return "", true
 	case "/clear":
 		m.eng.Clear()
 		return sOK.Render("✔ Conversation cleared"), false
@@ -632,6 +639,7 @@ Commands:
   /model <name>        Switch model
   /skill               List loaded skills
   /mcp                 List MCP servers
+  /shell               Enter shell mode (full bash with tab completion)
   /clear               Clear conversation
   /quit                Exit
 
@@ -640,6 +648,10 @@ Keys:
   Shift+Enter          New line
   Tab/Shift+Tab        Autocomplete
   Mouse wheel          Scroll screen
+
+Shell Mode:
+  Type '/shell' to enter full bash environment
+  Use '/chat' in shell to return to chat mode
 
 Non-Interactive Mode Examples:
   gal-cli chat -m "your message"
@@ -800,19 +812,38 @@ func runChat(agentName, modelName, sessionID, message string, debug bool) error 
 		return runOnce(eng, sess, message, debug)
 	}
 
-	// interactive mode
-	m := initialModel(eng, cfg, reg, sess)
-	p := tea.NewProgram(m)
-	_, err = p.Run()
-	fmt.Print("\033[0 q") // restore default cursor
+	// interactive mode with shell mode support
+	for {
+		m := initialModel(eng, cfg, reg, sess)
+		p := tea.NewProgram(m)
+		finalModel, err := p.Run()
+		fmt.Print("\033[0 q") // restore default cursor
 
-	// save session on exit
-	sess.Messages = eng.Messages
-	sess.Agent = eng.Agent.Conf.Name
-	sess.Model = eng.Agent.CurrentModel
-	sess.Save()
+		// save session on exit
+		sess.Messages = eng.Messages
+		sess.Agent = eng.Agent.Conf.Name
+		sess.Model = eng.Agent.CurrentModel
+		sess.Save()
 
-	return err
+		if err != nil {
+			return err
+		}
+
+		// check if we should enter shell mode
+		if m, ok := finalModel.(model); ok && m.shellMode {
+			// enter shell mode
+			if err := runShellMode(sess.ID); err != nil {
+				fmt.Fprintf(os.Stderr, "Shell mode error: %v\n", err)
+			}
+			// after shell exits, loop back to chat mode
+			continue
+		}
+
+		// normal exit
+		break
+	}
+
+	return nil
 }
 
 func runOnce(eng *engine.Engine, sess *session.Session, message string, debug bool) error {
@@ -868,6 +899,57 @@ func readMessage(message string) (string, error) {
 
 	// direct string
 	return message, nil
+}
+
+func runShellMode(sessionID string) error {
+	// Create temporary bashrc with /chat alias
+	tmpBashrc := "/tmp/gal-shell-" + sessionID
+	bashrcContent := `
+# GAL-CLI Shell Mode
+export GAL_SESSION="` + sessionID + `"
+export PS1="\[\033[1;35m\][Shell Mode]\[\033[0m\] \w $ "
+
+# /chat command to return to chat mode
+function /chat() {
+    exit 42
+}
+
+# Load user's bashrc if exists
+if [ -f ~/.bashrc ]; then
+    source ~/.bashrc
+fi
+
+echo ""
+echo "🐚 Shell Mode - Full bash with tab completion"
+echo "   Type '/chat' to return to chat mode"
+echo "   Session: ` + sessionID + `"
+echo ""
+`
+	if err := os.WriteFile(tmpBashrc, []byte(bashrcContent), 0644); err != nil {
+		return err
+	}
+	defer os.Remove(tmpBashrc)
+
+	// Start bash with custom rc
+	cmd := exec.Command("bash", "--rcfile", tmpBashrc)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+
+	if err := cmd.Run(); err != nil {
+		// Check if exit code is 42 (our /chat signal)
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if exitErr.ExitCode() == 42 {
+				// Normal return to chat mode
+				fmt.Println("\n✔ Returning to chat mode...")
+				return nil
+			}
+		}
+		return err
+	}
+
+	return nil
 }
 
 func buildEngine(cfg *config.Config, agentName string, reg *tool.Registry) (*engine.Engine, error) {
