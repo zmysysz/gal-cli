@@ -598,7 +598,12 @@ func (m *model) handleCommand(input string) (string, bool) {
 		}
 		return strings.Join(out, "\n"), false
 	case "/help":
+		var tools []string
+		for _, t := range m.eng.Agent.ToolDefs {
+			tools = append(tools, t.Name)
+		}
 		return sFaint.Render(fmt.Sprintf(`Session: %s
+Tools:   %s
 
 Commands:
   /agent list          List agents
@@ -614,7 +619,7 @@ Keys:
   ↑/↓                  Input history (on first/last line)
   Shift+Enter          New line
   Tab/Shift+Tab        Autocomplete
-  Mouse wheel          Scroll screen`, m.sess.ID)), false
+  Mouse wheel          Scroll screen`, m.sess.ID, strings.Join(tools, ", "))), false
 	case "/agent":
 		if len(parts) < 2 {
 			return sInfo.Render("Agent: " + m.eng.Agent.Conf.Name), false
