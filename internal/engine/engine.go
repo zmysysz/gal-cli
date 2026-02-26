@@ -43,6 +43,15 @@ func (e *Engine) InitDebug() {
 	}
 	e.debugFile = f
 	fmt.Fprintf(os.Stderr, "🐛 Debug log: %s\n", name)
+
+	// wire debug logger to provider
+	dbg := provider.DebugFunc(e.debugLog)
+	switch p := e.Provider.(type) {
+	case *provider.OpenAI:
+		p.Debug = dbg
+	case *provider.Anthropic:
+		p.Debug = dbg
+	}
 }
 
 func (e *Engine) debugLog(format string, args ...any) {

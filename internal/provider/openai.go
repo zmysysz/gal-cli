@@ -14,6 +14,7 @@ import (
 type OpenAI struct {
 	APIKey  string
 	BaseURL string
+	Debug   DebugFunc
 }
 
 func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Message, tools []ToolDef, onDelta func(StreamDelta)) error {
@@ -47,7 +48,7 @@ func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Messag
 		req.Header.Set("Authorization", "Bearer "+o.APIKey)
 	}
 
-	resp, err := doWithRetry(req, payload)
+	resp, err := doWithRetry(req, payload, o.Debug)
 	if err != nil {
 		return err
 	}
@@ -55,20 +56,28 @@ func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Messag
 
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
+		if o.Debug != nil {
+			o.Debug("API ERROR BODY: %s", string(b))
+		}
 		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(b))
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	// accumulate tool calls across chunks
 	tcAcc := map[int]*ToolCall{}
+	chunkCount := 0
 
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
+		chunkCount++
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
+			if o.Debug != nil {
+				o.Debug("STREAM DONE: %d chunks received", chunkCount)
+			}
 			// flush accumulated tool calls
 			if len(tcAcc) > 0 {
 				var tcs []ToolCall
@@ -121,6 +130,9 @@ func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Messag
 			}
 			acc.Function.Arguments += tc.Function.Arguments
 		}
+	}
+	if o.Debug != nil {
+		o.Debug("STREAM END: scanner finished, %d chunks, err=%v", chunkCount, scanner.Err())
 	}
 	return scanner.Err()
 }

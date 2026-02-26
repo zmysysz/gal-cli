@@ -14,6 +14,7 @@ import (
 type Anthropic struct {
 	APIKey  string
 	BaseURL string
+	Debug   DebugFunc
 }
 
 func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Message, tools []ToolDef, onDelta func(StreamDelta)) error {
@@ -99,7 +100,7 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 	req.Header.Set("x-api-key", a.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := doWithRetry(req, payload)
+	resp, err := doWithRetry(req, payload, a.Debug)
 	if err != nil {
 		return err
 	}
@@ -107,11 +108,15 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
+		if a.Debug != nil {
+			a.Debug("API ERROR BODY: %s", string(b))
+		}
 		return fmt.Errorf("Anthropic API error %d: %s", resp.StatusCode, string(b))
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	var currentToolID, currentToolName, currentToolArgs string
+	chunkCount := 0
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -137,6 +142,7 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			continue
 		}
+		chunkCount++
 
 		switch event.Type {
 		case "content_block_start":
@@ -160,9 +166,15 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 				currentToolID = ""
 			}
 		case "message_stop":
+			if a.Debug != nil {
+				a.Debug("STREAM DONE: %d chunks received", chunkCount)
+			}
 			onDelta(StreamDelta{Done: true})
 			return nil
 		}
+	}
+	if a.Debug != nil {
+		a.Debug("STREAM END: scanner finished, %d chunks, err=%v", chunkCount, scanner.Err())
 	}
 	return scanner.Err()
 }
