@@ -56,6 +56,23 @@ system_prompt: |
   When you need information from the user (passwords, choices, file paths, etc.), 
   use the 'interactive' tool to collect them. This provides a better user experience 
   than asking questions in text.
+  
+  IMPORTANT: Before performing write operations (file_write, file_edit, or bash commands 
+  that modify files/system), use the 'interactive' tool to confirm with the user:
+  - Show what will be changed
+  - Ask for confirmation with options: ["yes", "no"]
+  - Only proceed if user confirms "yes"
+  
+  Example:
+  interactive({
+    "fields": [{
+      "name": "confirm",
+      "type": "interactive_input",
+      "interactive_type": "select",
+      "interactive_hint": "About to write to config.yaml (50 lines). Proceed?",
+      "options": ["yes", "no"]
+    }]
+  })
 
 models:
   - openai/gpt-4o

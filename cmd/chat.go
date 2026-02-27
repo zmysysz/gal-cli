@@ -115,6 +115,16 @@ type interactiveEchoMsg struct {
 }
 type interactiveNextPromptMsg struct{}
 
+type toolConfirmMsg struct {
+	toolName string
+	args     map[string]any
+	preview  string
+}
+type toolConfirmResponseMsg struct {
+	approved bool
+	skipFuture bool
+}
+
 // --- input history persistence ---
 
 func historyPath() string {
@@ -267,6 +277,12 @@ type model struct {
 	interactiveRequests []engine.InteractiveInputRequest
 	interactiveIndex    int
 	interactiveResults  map[string]string
+	// write confirmation
+	confirmMode       bool
+	confirmToolName   string
+	confirmArgs       map[string]any
+	confirmSkipFuture bool
+	isNonInteractive  bool // true for -m mode
 }
 
 func initialModel(eng *engine.Engine, cfg *config.Config, reg *tool.Registry, sess *session.Session) model {
@@ -1029,6 +1045,7 @@ func runChat(agentName, modelName, sessionID, message string, debug bool) error 
 
 	// interactive mode
 	m := initialModel(eng, cfg, reg, sess)
+	m.isNonInteractive = false // interactive mode
 	p := tea.NewProgram(m)
 	_, err = p.Run()
 	fmt.Print("\033[0 q") // restore default cursor
