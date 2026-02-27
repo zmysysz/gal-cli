@@ -350,6 +350,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC {
+			// If in interactive mode, cancel it
+			if m.interactiveMode {
+				m.interactiveMode = false
+				m.waiting = true
+				// Send error to cancel the request
+				if m.streamCh != nil {
+					m.streamCh <- interactiveResponseMsg{
+						results: nil,
+						err:     fmt.Errorf("user cancelled interactive input"),
+					}
+				}
+				return m, printAbove(sErr.Render("✘ Interactive input cancelled"))
+			}
 			saveHistory(m.inputHist)
 			return m, tea.Quit
 		}
@@ -520,9 +533,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.interactiveResults = make(map[string]string)
 		m.waiting = false // Allow user input
 		
-		// Show first prompt
+		// Show tool call indicator and first prompt
 		if len(msg.requests) > 0 {
-			return m, m.showInteractivePrompt()
+			return m, tea.Batch(
+				printAbove(sTool.Render("⚡ interactive")),
+				m.showInteractivePrompt(),
+			)
 		}
 		return m, nil
 
@@ -689,6 +705,13 @@ func (m *model) wrapInput() string {
 }
 
 func (m model) View() string {
+	if m.interactiveMode {
+		// Interactive mode: show special status
+		progress := fmt.Sprintf("%d/%d", m.interactiveIndex+1, len(m.interactiveRequests))
+		status := sInfo.Render(fmt.Sprintf("Interactive input %s", progress)) + 
+			sFaint.Render(" (Ctrl+C to cancel)")
+		return m.wrapInput() + "\n" + status
+	}
 	if m.waiting {
 		if m.streaming != "" {
 			return m.streaming + "\n" + m.spinner.View() + sFaint.Render(" streaming...")
