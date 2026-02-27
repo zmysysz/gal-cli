@@ -339,7 +339,7 @@ func (r *Registry) registerBuiltins() {
 	// interactive
 	r.Register(provider.ToolDef{
 		Name:        "interactive",
-		Description: "Collect user input interactively. Use this when you need information from the user (passwords, file paths, choices, etc.) instead of asking in text. You can request multiple fields at once, and the user will be prompted for each one sequentially. Returns a JSON object with all collected values.",
+		Description: "Collect user input interactively. Use this when you need information from the user instead of asking in text. CRITICAL: If a bash command requires interactive input (sudo password, SSH passphrase, database credentials), you MUST use this tool FIRST to collect the information, then use the values in your command. Examples: (1) sudo: collect password with this tool, then use 'echo $password | sudo -S command'. (2) SSH key: collect key_type and passphrase, then use in ssh-keygen. (3) Write operations: collect confirmation (yes/no/trust) before file_write/file_edit. You can request multiple fields at once, and the user will be prompted for each one sequentially. Returns a JSON object with all collected values.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
