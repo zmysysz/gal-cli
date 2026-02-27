@@ -389,13 +389,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.inputHist = append(m.inputHist, input)
-			// Check if it's a slash command (e.g., /help) vs a path (e.g., /bin/ls)
-			// Slash commands: start with / followed by letters, no second /
-			isSlashCmd := strings.HasPrefix(input, "/") && len(input) > 1 && 
-				!strings.Contains(input[1:], "/") && 
-				((input[1] >= 'a' && input[1] <= 'z') || (input[1] >= 'A' && input[1] <= 'Z'))
 			
-			if isSlashCmd {
+			// Check if it's a built-in slash command
+			// Extract first word (command part before first space)
+			firstWord := input
+			if idx := strings.Index(input, " "); idx > 0 {
+				firstWord = input[:idx]
+			}
+			
+			// List of built-in commands
+			builtinCommands := []string{
+				"/shell", "/chat", "/quit", "/exit", "/clear", 
+				"/skill", "/mcp", "/help", "/agent", "/model",
+			}
+			
+			isBuiltinCmd := false
+			for _, cmd := range builtinCommands {
+				if firstWord == cmd {
+					isBuiltinCmd = true
+					break
+				}
+			}
+			
+			if isBuiltinCmd {
 				if input == "/quit" || input == "/exit" {
 					saveHistory(m.inputHist)
 					return m, tea.Quit
@@ -408,6 +424,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Return the message directly to Update
 				return m.Update(msg)
 			}
+			
+			// Not a built-in command
+			// If starts with / in chat mode, it's an unknown command
+			if !m.shellMode && strings.HasPrefix(input, "/") {
+				return m.Update(sErr.Render("Unknown command: " + firstWord + " (type /help)"))
+			}
+			
 			// shell mode: execute command directly
 			if m.shellMode {
 				// Show command being executed

@@ -189,12 +189,18 @@ Shell mode provides a lightweight terminal interface within the chat session:
 - Tab completion for commands and file paths
 - Bash alias support (`ll`, `la`, etc. from `~/.bashrc`)
 - Full path commands work (`/bin/ls`, `/usr/bin/python`)
+- Built-in commands work everywhere (`/model zhipu/glm-4-plus` works in both chat and shell mode)
 - Directory navigation with `cd`
 - All bash features (pipes, redirects, variables, etc.)
 - Command history with ↑/↓ arrows
 
 **Context Mode:**
 When using `/shell --context`, command outputs are added to the conversation history, allowing the LLM to see and respond to command results. Useful for debugging, analysis, or iterative tasks.
+
+**Command Priority:**
+1. Built-in commands (`/model`, `/agent`, `/help`, etc.) are always recognized first
+2. In shell mode: other `/` prefixed inputs are treated as shell commands (e.g., `/bin/ls`)
+3. In chat mode: unknown `/` commands show an error message
 
 Return to chat mode with `/chat`.
 
