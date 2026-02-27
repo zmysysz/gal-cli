@@ -803,6 +803,12 @@ Shell Mode:
   - All bash features (pipes, redirects, etc.)
   - Type '/chat' to return to chat mode
 
+Interactive Tool:
+  - LLM can use 'interactive' tool to collect user input
+  - Supports text input and selection from options
+  - Progressive prompts (one question at a time)
+  - Sensitive fields (passwords) are marked with 🔒
+
 Non-Interactive Mode Examples:
   gal-cli chat -m "your message"
   gal-cli chat -m @prompt.txt
