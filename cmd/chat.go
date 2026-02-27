@@ -353,16 +353,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// If in interactive mode, cancel it
 			if m.interactiveMode {
 				m.interactiveMode = false
-				m.waiting = true
-				// Send error response
-				go func() {
-					if m.streamCh != nil {
-						m.streamCh <- interactiveResponseMsg{
-							results: nil,
-							err:     fmt.Errorf("user cancelled"),
-						}
-					}
-				}()
+				m.waiting = false
+				// Clear stream channel to stop waiting
+				if m.streamCh != nil {
+					close(m.streamCh)
+					m.streamCh = nil
+				}
 				return m, printAbove(sErr.Render("✘ Interactive input cancelled"))
 			}
 			saveHistory(m.inputHist)
