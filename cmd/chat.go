@@ -399,13 +399,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.compIdx = 0
 			m.histIdx = -1
 			m.histBuf = ""
-			if input == "" {
-				return m, nil
-			}
 			
-			// Handle interactive input mode
+			// Handle interactive input mode (allow empty input)
 			if m.interactiveMode {
 				return m, m.handleInteractiveInput(input)
+			}
+			
+			if input == "" {
+				return m, nil
 			}
 			
 			m.inputHist = append(m.inputHist, input)
