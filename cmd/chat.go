@@ -1288,7 +1288,8 @@ func (m *model) handleInteractiveInput(input string) tea.Cmd {
 			results: m.interactiveResults,
 			err:     nil,
 		}
-		return nil
+		// Continue waiting for stream
+		return waitForStream(m.streamCh)()
 	}
 }
 
