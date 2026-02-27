@@ -350,6 +350,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC {
+			// If in interactive mode, cancel it
+			if m.interactiveMode {
+				m.interactiveMode = false
+				m.waiting = true
+				// Send error response
+				go func() {
+					if m.streamCh != nil {
+						m.streamCh <- interactiveResponseMsg{
+							results: nil,
+							err:     fmt.Errorf("user cancelled"),
+						}
+					}
+				}()
+				return m, printAbove(sErr.Render("✘ Interactive input cancelled"))
+			}
 			saveHistory(m.inputHist)
 			return m, tea.Quit
 		}
@@ -689,6 +704,13 @@ func (m *model) wrapInput() string {
 }
 
 func (m model) View() string {
+	if m.interactiveMode {
+		// Show interactive status
+		progress := fmt.Sprintf("%d/%d", m.interactiveIndex+1, len(m.interactiveRequests))
+		status := sInfo.Render(fmt.Sprintf("📝 Interactive input %s", progress)) + 
+			sFaint.Render(" (Ctrl+C to cancel)")
+		return m.wrapInput() + "\n" + status
+	}
 	if m.waiting {
 		if m.streaming != "" {
 			return m.streaming + "\n" + m.spinner.View() + sFaint.Render(" streaming...")
