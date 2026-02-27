@@ -1270,27 +1270,46 @@ func (m *model) handleInteractiveInput(input string) tea.Cmd {
 	
 	// Store result
 	m.interactiveResults[req.Name] = input
+	
+	// Show echo of user input (mask sensitive fields)
+	var echo string
+	if req.Sensitive {
+		if input == "" {
+			echo = sFaint.Render("  → (empty)")
+		} else {
+			echo = sFaint.Render("  → ********")
+		}
+	} else {
+		echo = sFaint.Render("  → " + input)
+	}
+	
 	m.interactiveIndex++
 	
 	// Check if we have more prompts
 	if m.interactiveIndex < len(m.interactiveRequests) {
-		// Show next prompt
-		return m.showInteractivePrompt()
+		// Show echo and next prompt
+		return tea.Batch(
+			printAbove(echo),
+			m.showInteractivePrompt(),
+		)
 	}
 	
 	// All inputs collected, send response back to engine
 	m.interactiveMode = false
 	m.waiting = true
 	
-	return func() tea.Msg {
-		// Send results back through the channel
-		m.streamCh <- interactiveResponseMsg{
-			results: m.interactiveResults,
-			err:     nil,
-		}
-		// Continue waiting for stream
-		return waitForStream(m.streamCh)()
-	}
+	return tea.Batch(
+		printAbove(echo),
+		func() tea.Msg {
+			// Send results back through the channel
+			m.streamCh <- interactiveResponseMsg{
+				results: m.interactiveResults,
+				err:     nil,
+			}
+			// Continue waiting for stream
+			return waitForStream(m.streamCh)()
+		},
+	)
 }
 
 type shellCwdMsg string
