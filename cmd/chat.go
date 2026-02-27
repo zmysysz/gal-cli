@@ -354,10 +354,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.interactiveMode {
 				m.interactiveMode = false
 				m.waiting = false
-				// Clear stream channel to stop waiting
+				// Send cancellation response to unblock goroutine
 				if m.streamCh != nil {
-					close(m.streamCh)
-					m.streamCh = nil
+					go func() {
+						m.streamCh <- interactiveResponseMsg{
+							results: nil,
+							err:     fmt.Errorf("cancelled"),
+						}
+					}()
 				}
 				return m, printAbove(sErr.Render("✘ Interactive input cancelled"))
 			}
@@ -754,7 +758,10 @@ func (m *model) sendCmd(input string) tea.Cmd {
 			},
 		)
 		if err != nil {
-			ch <- streamErrMsg{err}
+			// Don't show error if it's a cancellation
+			if err.Error() != "cancelled" {
+				ch <- streamErrMsg{err}
+			}
 			return
 		}
 		if fullContent == "" {
