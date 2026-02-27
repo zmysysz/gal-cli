@@ -312,6 +312,59 @@ func (r *Registry) registerBuiltins() {
 		}
 		return string(out), nil
 	})
+
+	// interactive
+	r.Register(provider.ToolDef{
+		Name:        "interactive",
+		Description: "Collect user input interactively. Use this when you need information from the user (passwords, file paths, choices, etc.) instead of asking in text. You can request multiple fields at once, and the user will be prompted for each one sequentially. Returns a JSON object with all collected values.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"fields": map[string]any{
+					"type":        "array",
+					"description": "List of fields to collect from the user",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"name": map[string]any{
+								"type":        "string",
+								"description": "Field identifier (used as key in result)",
+							},
+							"type": map[string]any{
+								"type":        "string",
+								"description": "Must be 'interactive_input' to trigger interactive collection",
+								"enum":        []string{"interactive_input"},
+							},
+							"interactive_type": map[string]any{
+								"type":        "string",
+								"description": "Input type: 'blank' for free text, 'select' for choosing from options",
+								"enum":        []string{"blank", "select"},
+							},
+							"interactive_hint": map[string]any{
+								"type":        "string",
+								"description": "Prompt text shown to the user",
+							},
+							"options": map[string]any{
+								"type":        "array",
+								"description": "Available choices (required for 'select' type)",
+								"items":       map[string]any{"type": "string"},
+							},
+							"sensitive": map[string]any{
+								"type":        "boolean",
+								"description": "Whether this is sensitive data like passwords (shows 🔒 indicator)",
+							},
+						},
+						"required": []string{"name", "type", "interactive_type", "interactive_hint"},
+					},
+				},
+			},
+			"required": []string{"fields"},
+		},
+	}, func(ctx context.Context, args map[string]any) (string, error) {
+		// This is a placeholder - the actual interactive collection
+		// is handled by the engine when it detects type="interactive_input"
+		return "interactive input collected", nil
+	})
 }
 
 // toInt converts a JSON number (float64) or string to int.

@@ -52,6 +52,10 @@ var defaultAgentYAML = `name: default
 description: General-purpose assistant
 system_prompt: |
   You are a helpful assistant.
+  
+  When you need information from the user (passwords, choices, file paths, etc.), 
+  use the 'interactive' tool to collect them. This provides a better user experience 
+  than asking questions in text.
 
 models:
   - openai/gpt-4o
@@ -72,6 +76,7 @@ tools:
   - file_list
   - grep
   - bash
+  - interactive
 
 skills: []
 
