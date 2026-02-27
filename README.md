@@ -16,7 +16,8 @@ A lightweight, extensible multi-agent CLI tool for LLM workflows — built for d
 
 - **Multi-agent** — define multiple agents with different system prompts, tools, and models; switch on the fly
 - **Multi-provider** — OpenAI, Anthropic, DeepSeek, Ollama, ZhipuAI (any OpenAI-compatible API)
-- **Tool calling** — built-in tools (`file_read`, `file_write`, `file_edit`, `file_list`, `grep`, `bash`) with agentic loop
+- **Tool calling** — built-in tools (`file_read`, `file_write`, `file_edit`, `file_list`, `grep`, `bash`, `interactive`) with agentic loop
+- **Interactive input** — LLM can collect user information progressively (passwords, choices, etc.) without multiple back-and-forth messages
 - **Skills** — user-defined capability packs: prompt injection via `SKILL.md` + auto-registered script tools
 - **MCP** — connect to remote tool servers via HTTP-based Model Context Protocol
 - **Streaming** — real-time streamed responses from all providers
@@ -204,6 +205,82 @@ When using `/shell --context`, command outputs are added to the conversation his
 
 Return to chat mode with `/chat`.
 
+## Interactive Input
+
+The `interactive` tool allows LLM to collect user information progressively without multiple back-and-forth messages. This provides a better user experience for tasks requiring multiple inputs (passwords, choices, configuration values, etc.).
+
+### How It Works
+
+1. **LLM decides it needs user input** and calls the `interactive` tool with all questions at once
+2. **Progressive prompts** — user is asked questions one by one
+3. **Local collection** — no LLM calls during input collection
+4. **All results returned** — LLM receives all answers as JSON and continues the task
+
+### Example Usage
+
+When you ask "Generate an SSH key pair", the LLM will:
+
+```
+⚡ interactive
+📝 Select key type
+Options:
+  1) rsa
+  2) ed25519
+  3) ecdsa
+Enter number or text:
+> 2
+  → ed25519
+
+📝 Key size (e.g., 4096 for RSA)
+> 256
+  → 256
+
+📝 Comment/email for the key
+> user@example.com
+  → user@example.com
+
+🔒 Passphrase (leave empty for none) (input hidden)
+> 
+  → (empty)
+
+📝 Interactive input 4/4 (Ctrl+C to cancel)
+```
+
+### Features
+
+- **Progressive UX** — one question at a time, not overwhelming
+- **Two input types** — `blank` (free text) and `select` (choose from options)
+- **Sensitive fields** — passwords show as `********` in echo
+- **Cancellable** — press Ctrl+C to cancel input collection
+- **Status indicator** — shows progress (e.g., "2/4") and cancel hint
+
+### Tool Definition
+
+The `interactive` tool is built-in and available to all agents. LLM calls it with a `fields` array:
+
+```json
+{
+  "fields": [
+    {
+      "name": "key_type",
+      "type": "interactive_input",
+      "interactive_type": "select",
+      "interactive_hint": "Select key type",
+      "options": ["rsa", "ed25519", "ecdsa"]
+    },
+    {
+      "name": "passphrase",
+      "type": "interactive_input",
+      "interactive_type": "blank",
+      "interactive_hint": "Enter passphrase (optional)",
+      "sensitive": true
+    }
+  ]
+}
+```
+
+See `INTERACTIVE_INPUT.md` for detailed documentation.
+
 ## Skills
 
 Skills are self-contained capability packs that extend an agent with domain-specific knowledge and scripts.
@@ -254,6 +331,7 @@ When the LLM decides to call a tool (built-in, skill script, or MCP), gal-cli ex
 | `file_list` | List directory tree with configurable depth |
 | `grep` | Search text pattern in files recursively |
 | `bash` | Execute shell commands |
+| `interactive` | Collect user input progressively (passwords, choices, etc.) |
 
 ## License
 
