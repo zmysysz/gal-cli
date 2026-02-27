@@ -146,34 +146,45 @@ func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText
 		e.Messages = append(e.Messages, provider.Message{Role: "assistant", ToolCalls: toolCalls})
 		e.debugLog("RESPONSE turn %d / round %d: %d tool calls", turn, round, len(toolCalls))
 
-		// Check if any tool calls are interactive_input type
+		// Check if any tool calls are 'interactive' tool
 		var interactiveRequests []InteractiveInputRequest
-		var interactiveIndices []int
+		var interactiveToolIndex int = -1
 		
 		for i, tc := range toolCalls {
-			var args map[string]any
-			json.Unmarshal([]byte(tc.Function.Arguments), &args)
-			
-			// Check if this is an interactive_input tool
-			if typeVal, ok := args["type"].(string); ok && typeVal == "interactive_input" {
-				req := InteractiveInputRequest{
-					Name:            tc.Function.Name,
-					InteractiveType: getStringField(args, "interactive_type"),
-					InteractiveHint: getStringField(args, "interactive_hint"),
-					Sensitive:       getBoolField(args, "sensitive"),
-				}
+			// Check if this is the 'interactive' tool
+			if tc.Function.Name == "interactive" {
+				var args map[string]any
+				json.Unmarshal([]byte(tc.Function.Arguments), &args)
 				
-				// Extract options for select type
-				if opts, ok := args["options"].([]any); ok {
-					for _, opt := range opts {
-						if s, ok := opt.(string); ok {
-							req.Options = append(req.Options, s)
+				// Extract fields array
+				if fieldsRaw, ok := args["fields"].([]any); ok {
+					for _, fieldRaw := range fieldsRaw {
+						if fieldMap, ok := fieldRaw.(map[string]any); ok {
+							// Check if type is "interactive_input"
+							if typeVal := getStringField(fieldMap, "type"); typeVal == "interactive_input" {
+								req := InteractiveInputRequest{
+									Name:            getStringField(fieldMap, "name"),
+									InteractiveType: getStringField(fieldMap, "interactive_type"),
+									InteractiveHint: getStringField(fieldMap, "interactive_hint"),
+									Sensitive:       getBoolField(fieldMap, "sensitive"),
+								}
+								
+								// Extract options for select type
+								if opts, ok := fieldMap["options"].([]any); ok {
+									for _, opt := range opts {
+										if s, ok := opt.(string); ok {
+											req.Options = append(req.Options, s)
+										}
+									}
+								}
+								
+								interactiveRequests = append(interactiveRequests, req)
+							}
 						}
 					}
+					interactiveToolIndex = i
+					break // Only process first interactive tool call
 				}
-				
-				interactiveRequests = append(interactiveRequests, req)
-				interactiveIndices = append(interactiveIndices, i)
 			}
 		}
 		
@@ -201,23 +212,13 @@ func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText
 			var result string
 			var err error
 			
-			// Check if this is an interactive tool that we collected input for
-			isInteractive := false
-			for idx, interactiveIdx := range interactiveIndices {
-				if i == interactiveIdx {
-					isInteractive = true
-					// Return the collected result
-					if interactiveResults != nil {
-						result = interactiveResults[interactiveRequests[idx].Name]
-					} else {
-						result = "error: no interactive handler provided"
-					}
-					break
-				}
-			}
-			
-			// Execute non-interactive tools normally
-			if !isInteractive {
+			// Check if this is the interactive tool that we collected input for
+			if i == interactiveToolIndex && interactiveResults != nil {
+				// Return all collected results as JSON
+				resultJSON, _ := json.Marshal(interactiveResults)
+				result = string(resultJSON)
+			} else {
+				// Execute non-interactive tools normally
 				result, err = e.Agent.Registry.Execute(ctx, tc.Function.Name, args)
 				if err != nil {
 					result = "error: " + err.Error()
