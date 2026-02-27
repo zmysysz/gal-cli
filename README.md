@@ -253,6 +253,37 @@ Enter number or text:
 - **Sensitive fields** — passwords show as `********` in echo
 - **Cancellable** — press Ctrl+C to cancel input collection
 - **Status indicator** — shows progress (e.g., "2/4") and cancel hint
+- **Safety confirmations** — LLM should use this tool to confirm dangerous operations (write/delete/system modifications) with yes/no/trust options
+
+### Use Cases
+
+1. **Information Collection** — passwords, API keys, configuration values
+2. **Command Prerequisites** — sudo password, SSH passphrase before executing commands
+3. **Safety Confirmations** — confirm before:
+   - Write operations (file_write, file_edit)
+   - Dangerous operations (rm, dd, system modifications)
+   - Privacy-related actions (reading sensitive files, network requests)
+   - System changes (installing software, modifying configs)
+
+### Confirmation Pattern
+
+For risky operations, LLM should ask for confirmation:
+
+```json
+{
+  "fields": [{
+    "name": "confirm",
+    "type": "interactive_input",
+    "interactive_type": "select",
+    "interactive_hint": "About to delete 50 files. Proceed?",
+    "options": ["yes", "no", "trust"]
+  }]
+}
+```
+
+- **yes** — proceed with this operation
+- **no** — cancel the operation
+- **trust** — proceed and skip similar confirmations in this conversation
 
 ### Tool Definition
 
