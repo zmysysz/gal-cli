@@ -110,6 +110,9 @@ type interactiveResponseMsg struct {
 	results map[string]string
 	err     error
 }
+type interactiveEchoMsg struct {
+	echo string
+}
 
 // --- input history persistence ---
 
@@ -521,6 +524,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.showInteractivePrompt()
 		}
 		return m, nil
+
+	case interactiveEchoMsg:
+		// Print echo, then check if we need to show next prompt or finish
+		if m.interactiveIndex < len(m.interactiveRequests) {
+			// More prompts to show
+			return m, tea.Batch(
+				printAbove(msg.echo),
+				m.showInteractivePrompt(),
+			)
+		}
+		// All inputs collected
+		m.interactiveMode = false
+		m.waiting = true
+		return m, tea.Batch(
+			printAbove(msg.echo),
+			func() tea.Msg {
+				// Send results back through the channel
+				m.streamCh <- interactiveResponseMsg{
+					results: m.interactiveResults,
+					err:     nil,
+				}
+				// Continue waiting for stream
+				return waitForStream(m.streamCh)()
+			},
+		)
 
 	case shellModeMsg:
 		m.shellMode = msg.enable
@@ -1286,31 +1314,10 @@ func (m *model) handleInteractiveInput(input string) tea.Cmd {
 	
 	m.interactiveIndex++
 	
-	// Check if we have more prompts
-	if m.interactiveIndex < len(m.interactiveRequests) {
-		// Show echo and next prompt
-		return tea.Batch(
-			printAbove(echo),
-			m.showInteractivePrompt(),
-		)
+	// Return echo message, which will trigger next prompt in Update
+	return func() tea.Msg {
+		return interactiveEchoMsg{echo: echo}
 	}
-	
-	// All inputs collected, send response back to engine
-	m.interactiveMode = false
-	m.waiting = true
-	
-	return tea.Batch(
-		printAbove(echo),
-		func() tea.Msg {
-			// Send results back through the channel
-			m.streamCh <- interactiveResponseMsg{
-				results: m.interactiveResults,
-				err:     nil,
-			}
-			// Continue waiting for stream
-			return waitForStream(m.streamCh)()
-		},
-	)
 }
 
 type shellCwdMsg string
