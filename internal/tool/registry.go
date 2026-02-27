@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gal-cli/gal-cli/internal/provider"
 )
@@ -293,7 +294,7 @@ func (r *Registry) registerBuiltins() {
 	// bash
 	r.Register(provider.ToolDef{
 		Name:        "bash",
-		Description: "Execute a bash command and return its output. For commands requiring interactive input (passwords, confirmations), provide the command to the user to run manually instead of executing it directly.",
+		Description: "Execute a bash command and return its output. For commands requiring passwords (sudo, ssh), use the 'interactive' tool to collect the password first, then use 'sudo -S' or 'sshpass'. For interactive editors (vim, nano), use file_write/file_edit tools instead. Commands timeout after 30 seconds.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -303,10 +304,32 @@ func (r *Registry) registerBuiltins() {
 		},
 	}, func(ctx context.Context, args map[string]any) (string, error) {
 		command, _ := args["command"].(string)
+		
+		// Check for interactive commands
+		trimmedCmd := strings.TrimSpace(command)
+		interactiveCmds := []string{"vim", "vi", "nano", "emacs", "top", "htop", "less", "more"}
+		for _, icmd := range interactiveCmds {
+			if strings.HasPrefix(trimmedCmd, icmd+" ") || trimmedCmd == icmd {
+				return "", fmt.Errorf("interactive command '%s' not supported - use file_write/file_edit for editing, or run command manually", icmd)
+			}
+		}
+		
+		// Check for sudo without -S flag
+		if strings.Contains(trimmedCmd, "sudo ") && !strings.Contains(trimmedCmd, "sudo -S") && !strings.Contains(trimmedCmd, "NOPASSWD") {
+			return "", fmt.Errorf("sudo requires password - use 'interactive' tool to collect password, then use 'echo $password | sudo -S command'")
+		}
+		
+		// Add timeout
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		
 		cmd := exec.CommandContext(ctx, "bash", "-c", command)
 		
 		// Capture output for non-interactive commands
 		out, err := cmd.CombinedOutput()
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("command timeout after 30 seconds - may be waiting for input")
+		}
 		if err != nil {
 			return string(out) + "\n" + err.Error(), nil
 		}
