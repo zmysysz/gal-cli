@@ -1,6 +1,6 @@
 # GAL-CLI
 
-A lightweight, extensible multi-agent CLI tool for LLM workflows — built for developers who want full control.
+A lightweight, extensible multi-agent CLI tool for LLM workflows — built for developers, DevOps, and QA professionals who want full control.
 
 ## Why GAL-CLI?
 
@@ -8,6 +8,8 @@ A lightweight, extensible multi-agent CLI tool for LLM workflows — built for d
 - **Universal provider support** — OpenAI, Anthropic, DeepSeek, Ollama, ZhipuAI, or any OpenAI-compatible API
 - **Extensible by design** — add capabilities via Skills (markdown docs + scripts) or MCP servers, no code changes needed
 - **Agentic loop** — automatic tool execution with streaming output, handles complex multi-step tasks
+- **Interactive input** — progressive user input collection for passwords, confirmations, and safety checks
+- **Shell integration** — built-in shell mode with alias support, tab completion, and LLM context awareness
 - **Session management** — persistent conversations with auto-save, resume anytime with full context
 - **Smart context handling** — automatic LLM-based compression when hitting token limits
 - **Developer-friendly** — pure CLI/TUI, no web UI overhead, works over SSH, integrates with your workflow
