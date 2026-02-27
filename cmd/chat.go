@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/cursor"
@@ -101,6 +102,14 @@ type streamErrMsg struct{ err error }
 type compressStartMsg struct{}
 type compressDoneMsg struct{}
 type compressErrMsg struct{ err error }
+
+type interactiveRequestMsg struct {
+	requests []engine.InteractiveInputRequest
+}
+type interactiveResponseMsg struct {
+	results map[string]string
+	err     error
+}
 
 // --- input history persistence ---
 
@@ -249,6 +258,11 @@ type model struct {
 	shellMode        bool
 	shellCwd         string
 	shellWithContext bool // whether to add shell output to LLM context
+	// interactive input
+	interactiveMode     bool
+	interactiveRequests []engine.InteractiveInputRequest
+	interactiveIndex    int
+	interactiveResults  map[string]string
 }
 
 func initialModel(eng *engine.Engine, cfg *config.Config, reg *tool.Registry, sess *session.Session) model {
@@ -388,6 +402,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if input == "" {
 				return m, nil
 			}
+			
+			// Handle interactive input mode
+			if m.interactiveMode {
+				return m, m.handleInteractiveInput(input)
+			}
+			
 			m.inputHist = append(m.inputHist, input)
 			
 			// Check if it's a built-in slash command
@@ -486,6 +506,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case compressErrMsg:
 		m.compressing = false
 		return m, printAbove(sErr.Render("⚠ compress: " + msg.err.Error()))
+
+	case interactiveRequestMsg:
+		// Enter interactive mode
+		m.interactiveMode = true
+		m.interactiveRequests = msg.requests
+		m.interactiveIndex = 0
+		m.interactiveResults = make(map[string]string)
+		m.waiting = false // Allow user input
+		
+		// Show first prompt
+		if len(msg.requests) > 0 {
+			return m, m.showInteractivePrompt()
+		}
+		return m, nil
 
 	case shellModeMsg:
 		m.shellMode = msg.enable
@@ -645,7 +679,7 @@ func (m *model) sendCmd(input string) tea.Cmd {
 
 	go func() {
 		var fullContent string
-		err := eng.SendWithCallbacks(context.Background(), input,
+		err := eng.SendWithInteractive(context.Background(), input,
 			func(text string) {
 				fullContent += text
 				ch <- streamChunkMsg(text)
@@ -655,6 +689,16 @@ func (m *model) sendCmd(input string) tea.Cmd {
 			},
 			func(preview string) {
 				ch <- streamToolResultMsg(preview)
+			},
+			func(requests []engine.InteractiveInputRequest) (map[string]string, error) {
+				// Signal that we need interactive input
+				ch <- interactiveRequestMsg{requests: requests}
+				// Wait for response
+				response := <-ch
+				if resp, ok := response.(interactiveResponseMsg); ok {
+					return resp.results, resp.err
+				}
+				return nil, fmt.Errorf("unexpected response type")
 			},
 		)
 		if err != nil {
@@ -1166,6 +1210,79 @@ func (m *model) executeShellCmd(input string) tea.Cmd {
 			output:      result,
 			withContext: m.shellWithContext,
 		}
+	}
+}
+
+// showInteractivePrompt displays the current interactive input prompt
+func (m *model) showInteractivePrompt() tea.Cmd {
+	if m.interactiveIndex >= len(m.interactiveRequests) {
+		return nil
+	}
+	
+	req := m.interactiveRequests[m.interactiveIndex]
+	var prompt string
+	
+	// Build prompt based on type
+	switch req.InteractiveType {
+	case "select":
+		prompt = sInfo.Render(fmt.Sprintf("📝 %s", req.InteractiveHint))
+		if len(req.Options) > 0 {
+			prompt += "\n" + sFaint.Render("Options:")
+			for i, opt := range req.Options {
+				prompt += fmt.Sprintf("\n  %d) %s", i+1, opt)
+			}
+			prompt += "\n" + sFaint.Render("Enter number or text:")
+		}
+	case "blank":
+		fallthrough
+	default:
+		if req.Sensitive {
+			prompt = sInfo.Render(fmt.Sprintf("🔒 %s (input hidden)", req.InteractiveHint))
+		} else {
+			prompt = sInfo.Render(fmt.Sprintf("📝 %s", req.InteractiveHint))
+		}
+	}
+	
+	return printAbove(prompt)
+}
+
+// handleInteractiveInput processes user input during interactive mode
+func (m *model) handleInteractiveInput(input string) tea.Cmd {
+	if m.interactiveIndex >= len(m.interactiveRequests) {
+		return nil
+	}
+	
+	req := m.interactiveRequests[m.interactiveIndex]
+	
+	// Handle select type - convert number to option
+	if req.InteractiveType == "select" && len(req.Options) > 0 {
+		// Try to parse as number
+		if num, err := strconv.Atoi(input); err == nil && num > 0 && num <= len(req.Options) {
+			input = req.Options[num-1]
+		}
+	}
+	
+	// Store result
+	m.interactiveResults[req.Name] = input
+	m.interactiveIndex++
+	
+	// Check if we have more prompts
+	if m.interactiveIndex < len(m.interactiveRequests) {
+		// Show next prompt
+		return m.showInteractivePrompt()
+	}
+	
+	// All inputs collected, send response back to engine
+	m.interactiveMode = false
+	m.waiting = true
+	
+	return func() tea.Msg {
+		// Send results back through the channel
+		m.streamCh <- interactiveResponseMsg{
+			results: m.interactiveResults,
+			err:     nil,
+		}
+		return nil
 	}
 }
 

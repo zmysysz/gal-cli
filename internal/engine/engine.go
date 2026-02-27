@@ -82,6 +82,20 @@ func (e *Engine) Send(ctx context.Context, userMsg string, onText func(string)) 
 }
 
 func (e *Engine) SendWithCallbacks(ctx context.Context, userMsg string, onText func(string), onToolCall func(string), onToolResult func(string)) error {
+	return e.SendWithInteractive(ctx, userMsg, onText, onToolCall, onToolResult, nil)
+}
+
+// InteractiveInputRequest represents a request for user input
+type InteractiveInputRequest struct {
+	Name             string   `json:"name"`
+	InteractiveType  string   `json:"interactive_type"`  // "blank" or "select"
+	InteractiveHint  string   `json:"interactive_hint"`
+	Options          []string `json:"options,omitempty"` // for select type
+	Sensitive        bool     `json:"sensitive,omitempty"`
+}
+
+// SendWithInteractive adds support for interactive input collection
+func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText func(string), onToolCall func(string), onToolResult func(string), onInteractive func([]InteractiveInputRequest) (map[string]string, error)) error {
 	e.debugTurn++
 	turn := e.debugTurn
 	round := 0
@@ -132,7 +146,49 @@ func (e *Engine) SendWithCallbacks(ctx context.Context, userMsg string, onText f
 		e.Messages = append(e.Messages, provider.Message{Role: "assistant", ToolCalls: toolCalls})
 		e.debugLog("RESPONSE turn %d / round %d: %d tool calls", turn, round, len(toolCalls))
 
-		for _, tc := range toolCalls {
+		// Check if any tool calls are interactive_input type
+		var interactiveRequests []InteractiveInputRequest
+		var interactiveIndices []int
+		
+		for i, tc := range toolCalls {
+			var args map[string]any
+			json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			
+			// Check if this is an interactive_input tool
+			if typeVal, ok := args["type"].(string); ok && typeVal == "interactive_input" {
+				req := InteractiveInputRequest{
+					Name:            tc.Function.Name,
+					InteractiveType: getStringField(args, "interactive_type"),
+					InteractiveHint: getStringField(args, "interactive_hint"),
+					Sensitive:       getBoolField(args, "sensitive"),
+				}
+				
+				// Extract options for select type
+				if opts, ok := args["options"].([]any); ok {
+					for _, opt := range opts {
+						if s, ok := opt.(string); ok {
+							req.Options = append(req.Options, s)
+						}
+					}
+				}
+				
+				interactiveRequests = append(interactiveRequests, req)
+				interactiveIndices = append(interactiveIndices, i)
+			}
+		}
+		
+		// If we have interactive requests and a handler, collect input
+		var interactiveResults map[string]string
+		if len(interactiveRequests) > 0 && onInteractive != nil {
+			var err error
+			interactiveResults, err = onInteractive(interactiveRequests)
+			if err != nil {
+				return err
+			}
+		}
+
+		// Process all tool calls
+		for i, tc := range toolCalls {
 			if onToolCall != nil {
 				onToolCall(tc.Function.Name)
 			}
@@ -142,9 +198,30 @@ func (e *Engine) SendWithCallbacks(ctx context.Context, userMsg string, onText f
 
 			e.debugLog("TOOL_CALL: %s args=%s", tc.Function.Name, tc.Function.Arguments)
 
-			result, err := e.Agent.Registry.Execute(ctx, tc.Function.Name, args)
-			if err != nil {
-				result = "error: " + err.Error()
+			var result string
+			var err error
+			
+			// Check if this is an interactive tool that we collected input for
+			isInteractive := false
+			for idx, interactiveIdx := range interactiveIndices {
+				if i == interactiveIdx {
+					isInteractive = true
+					// Return the collected result
+					if interactiveResults != nil {
+						result = interactiveResults[interactiveRequests[idx].Name]
+					} else {
+						result = "error: no interactive handler provided"
+					}
+					break
+				}
+			}
+			
+			// Execute non-interactive tools normally
+			if !isInteractive {
+				result, err = e.Agent.Registry.Execute(ctx, tc.Function.Name, args)
+				if err != nil {
+					result = "error: " + err.Error()
+				}
 			}
 
 			e.debugLog("TOOL_RESULT: %s (%d chars)", tc.Function.Name, len(result))
@@ -304,4 +381,19 @@ func (e *Engine) Compress(ctx context.Context, onStatus func(string)) error {
 	e.Messages = newMessages
 
 	return nil
+}
+
+// Helper functions for extracting fields from map[string]any
+func getStringField(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func getBoolField(m map[string]any, key string) bool {
+	if v, ok := m[key].(bool); ok {
+		return v
+	}
+	return false
 }
