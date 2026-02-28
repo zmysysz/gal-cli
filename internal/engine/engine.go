@@ -203,8 +203,9 @@ func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText
 
 		// Process all tool calls — readonly tools run in parallel, others serial
 		type toolResult struct {
-			index  int
-			result string
+			index   int
+			result  string
+			elapsed time.Duration
 		}
 
 		// Identify readonly batch (only if ALL are readonly and no interactive)
@@ -218,7 +219,7 @@ func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText
 			}
 		}
 
-		results := make([]string, len(toolCalls))
+		results := make([]toolResult, len(toolCalls))
 
 		if allReadOnly && len(toolCalls) > 1 {
 			// parallel execution
@@ -231,16 +232,18 @@ func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText
 					var args map[string]any
 					json.Unmarshal([]byte(tc.Function.Arguments), &args)
 					e.debugLog("TOOL_CALL[parallel]: %s args=%s", tc.Function.Name, tc.Function.Arguments)
+					start := time.Now()
 					res, err := e.Agent.Registry.Execute(ctx, tc.Function.Name, args)
+					elapsed := time.Since(start)
 					if err != nil {
 						res = "error: " + err.Error()
 					}
-					ch <- toolResult{idx, res}
+					ch <- toolResult{idx, res, elapsed}
 				}(i, tc)
 			}
 			for range toolCalls {
 				tr := <-ch
-				results[tr.index] = tr.result
+				results[tr.index] = tr
 			}
 		} else {
 			// serial execution
@@ -254,35 +257,38 @@ func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText
 
 				e.debugLog("TOOL_CALL: %s args=%s", tc.Function.Name, tc.Function.Arguments)
 
+				start := time.Now()
+				var res string
 				if i == interactiveToolIndex && interactiveResults != nil {
 					resultJSON, _ := json.Marshal(interactiveResults)
-					results[i] = string(resultJSON)
+					res = string(resultJSON)
 				} else {
-					res, err := e.Agent.Registry.Execute(ctx, tc.Function.Name, args)
+					var err error
+					res, err = e.Agent.Registry.Execute(ctx, tc.Function.Name, args)
 					if err != nil {
 						res = "error: " + err.Error()
 					}
-					results[i] = res
 				}
+				results[i] = toolResult{i, res, time.Since(start)}
 			}
 		}
 
 		// Emit results and append messages
 		for i, tc := range toolCalls {
-			result := results[i]
-			e.debugLog("TOOL_RESULT: %s (%d chars)", tc.Function.Name, len(result))
+			tr := results[i]
+			e.debugLog("TOOL_RESULT: %s (%d chars, %v)", tc.Function.Name, len(tr.result), tr.elapsed)
 
 			if onToolResult != nil {
-				preview := result
+				preview := tr.result
 				if len(preview) > 200 {
 					preview = preview[:200] + "..."
 				}
-				onToolResult(fmt.Sprintf("%s → %s", tc.Function.Name, preview))
+				onToolResult(fmt.Sprintf("%s → %s (%.1fs)", tc.Function.Name, preview, tr.elapsed.Seconds()))
 			}
 
 			e.Messages = append(e.Messages, provider.Message{
 				Role:       "tool",
-				Content:    result,
+				Content:    tr.result,
 				ToolCallID: tc.ID,
 			})
 		}
