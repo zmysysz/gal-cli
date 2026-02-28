@@ -77,6 +77,8 @@ var (
 	sBar     = lipgloss.NewStyle().Faint(true)
 	sLogo    = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
 	sDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	sDiffAdd = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	sDiffDel = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 )
 
 func banner(agentName, modelName, sessionID string) string {
@@ -283,6 +285,8 @@ type model struct {
 	confirmArgs       map[string]any
 	confirmSkipFuture bool
 	isNonInteractive  bool // true for -m mode
+	// cancellation
+	cancelFn context.CancelFunc
 }
 
 func initialModel(eng *engine.Engine, cfg *config.Config, reg *tool.Registry, sess *session.Session) model {
@@ -311,6 +315,29 @@ func initialModel(eng *engine.Engine, cfg *config.Config, reg *tool.Registry, se
 // printAbove returns a tea.Cmd that prints a line above the managed View area.
 func printAbove(s string) tea.Cmd {
 	return tea.Println(s)
+}
+
+// renderToolResult colorizes tool result output, highlighting diff lines.
+func renderToolResult(s string) string {
+	lines := strings.Split(s, "\n")
+	first := lines[0]
+	if len(lines) == 1 {
+		return sFaint.Render("  → " + first)
+	}
+	var sb strings.Builder
+	sb.WriteString(sFaint.Render("  → " + first))
+	for _, line := range lines[1:] {
+		sb.WriteString("\n")
+		switch {
+		case strings.HasPrefix(line, "+ "):
+			sb.WriteString("    " + sDiffAdd.Render(line))
+		case strings.HasPrefix(line, "- "):
+			sb.WriteString("    " + sDiffDel.Render(line))
+		default:
+			sb.WriteString("    " + sFaint.Render(line))
+		}
+	}
+	return sb.String()
 }
 
 func (m *model) statusBar() string {
@@ -370,6 +397,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.interactiveMode {
 				m.interactiveMode = false
 				m.waiting = false
+				if m.cancelFn != nil {
+					m.cancelFn()
+					m.cancelFn = nil
+				}
 				// Send cancellation response to unblock goroutine
 				if m.streamCh != nil {
 					go func() {
@@ -380,6 +411,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}()
 				}
 				return m, printAbove(sErr.Render("✘ Interactive input cancelled"))
+			}
+			// If waiting for LLM/tool response, cancel it
+			if m.waiting || m.compressing {
+				if m.cancelFn != nil {
+					m.cancelFn()
+					m.cancelFn = nil
+				}
+				m.streaming = ""
+				m.waiting = false
+				m.compressing = false
+				return m, printAbove(sErr.Render("✘ Cancelled"))
 			}
 			saveHistory(m.inputHist)
 			return m, tea.Quit
@@ -513,7 +555,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(printAbove(sTool.Render("⚡ "+string(msg))), waitForStream(m.streamCh))
 
 	case streamToolResultMsg:
-		return m, tea.Batch(printAbove(sFaint.Render("  → "+string(msg))), waitForStream(m.streamCh))
+		return m, tea.Batch(printAbove(renderToolResult(string(msg))), waitForStream(m.streamCh))
 
 	case streamDoneMsg:
 		rendered := msg.content
@@ -614,6 +656,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamErrMsg:
 		m.streaming = ""
 		m.waiting = false
+		// Suppress cancelled errors (already shown by Ctrl+C handler)
+		if msg.err.Error() == "cancelled" || msg.err.Error() == "context canceled" {
+			return m, nil
+		}
 		return m, printAbove(sErr.Render("✘ " + msg.err.Error()))
 	
 	case string:
@@ -747,11 +793,21 @@ func waitForStream(ch chan tea.Msg) tea.Cmd {
 func (m *model) sendCmd(input string) tea.Cmd {
 	ch := make(chan tea.Msg, 64)
 	m.streamCh = ch
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFn = cancel
 	eng := m.eng
 
 	go func() {
+		defer func() {
+			// Always send a terminal message so waitForStream never blocks forever
+			select {
+			case ch <- streamErrMsg{fmt.Errorf("cancelled")}:
+			default:
+			}
+		}()
+
 		var fullContent string
-		err := eng.SendWithInteractive(context.Background(), input,
+		err := eng.SendWithInteractive(ctx, input,
 			func(text string) {
 				fullContent += text
 				ch <- streamChunkMsg(text)
@@ -774,10 +830,10 @@ func (m *model) sendCmd(input string) tea.Cmd {
 			},
 		)
 		if err != nil {
-			// Don't show error if it's a cancellation
-			if err.Error() != "cancelled" {
-				ch <- streamErrMsg{err}
+			if ctx.Err() != nil {
+				return // cancelled, defer handles cleanup
 			}
+			ch <- streamErrMsg{err}
 			return
 		}
 		if fullContent == "" {
@@ -792,9 +848,14 @@ func (m *model) sendCmd(input string) tea.Cmd {
 
 func (m *model) compressCmd() tea.Cmd {
 	eng := m.eng
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFn = cancel
 	return func() tea.Msg {
-		err := eng.Compress(context.Background(), nil)
+		err := eng.Compress(ctx, nil)
 		if err != nil {
+			if ctx.Err() != nil {
+				return compressDoneMsg{} // cancelled, treat as done
+			}
 			return compressErrMsg{err}
 		}
 		return compressDoneMsg{}

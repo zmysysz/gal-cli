@@ -18,7 +18,7 @@ A lightweight, extensible multi-agent CLI tool for LLM workflows — built for d
 
 - **Multi-agent** — define multiple agents with different system prompts, tools, and models; switch on the fly
 - **Multi-provider** — OpenAI, Anthropic, DeepSeek, Ollama, ZhipuAI (any OpenAI-compatible API)
-- **Tool calling** — built-in tools (`file_read`, `file_write`, `file_edit`, `file_list`, `grep`, `bash`, `interactive`) with agentic loop
+- **Tool calling** — built-in tools (`file_read`, `file_write`, `file_edit`, `file_patch`, `file_list`, `grep`, `bash`, `http`, `interactive`) with agentic loop
 - **Interactive input** — LLM can collect user information progressively (passwords, choices, etc.) without multiple back-and-forth messages
 - **Skills** — user-defined capability packs: prompt injection via `SKILL.md` + auto-registered script tools
 - **MCP** — connect to remote tool servers via HTTP-based Model Context Protocol
@@ -352,7 +352,7 @@ MCP tools are auto-discovered and registered as `mcp_<server>_<tool>` (e.g. `mcp
 
 When the LLM decides to call a tool (built-in, skill script, or MCP), gal-cli executes it and feeds the result back automatically. This loop continues until the LLM produces a final text response.
 
-> **Note:** There is currently no iteration limit on the agentic loop. When the conversation context grows beyond the configured `context_limit` (default 60K tokens), old messages are automatically compressed via an LLM summarization call.
+> **Note:** The agentic loop has a 50-round iteration limit. When the conversation context grows beyond the configured `context_limit` (default 60K tokens), old messages are automatically compressed via an LLM summarization call.
 
 ## Built-in Tools
 
@@ -361,10 +361,16 @@ When the LLM decides to call a tool (built-in, skill script, or MCP), gal-cli ex
 | `file_read` | Read file content |
 | `file_write` | Write/create files |
 | `file_edit` | Replace lines by range (more efficient than file_write for partial edits) |
+| `file_patch` | Edit file by exact string replacement (must be unique match). Returns diff |
 | `file_list` | List directory tree with configurable depth |
 | `grep` | Search text pattern in files recursively |
-| `bash` | Execute shell commands |
+| `bash` | Execute shell commands (30s timeout) |
+| `http` | Make HTTP requests (GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS). Returns structured JSON |
 | `interactive` | Collect user input progressively (passwords, choices, etc.) |
+
+Read-only tools (`file_read`, `file_list`, `grep`, `http`) execute in parallel when the LLM requests multiple in one turn. Write tools run serially.
+
+**Cancellation:** Press Ctrl+C during streaming/tool execution to cancel the current request and return to input. Press Ctrl+C when idle to exit.
 
 ## License
 

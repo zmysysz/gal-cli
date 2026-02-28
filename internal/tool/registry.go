@@ -19,12 +19,14 @@ type Handler func(ctx context.Context, args map[string]any) (string, error)
 type Registry struct {
 	tools    map[string]Handler
 	toolDefs map[string]provider.ToolDef
+	readonly map[string]bool
 }
 
 func NewRegistry() *Registry {
 	r := &Registry{
 		tools:    make(map[string]Handler),
 		toolDefs: make(map[string]provider.ToolDef),
+		readonly: make(map[string]bool),
 	}
 	r.registerBuiltins()
 	return r
@@ -33,6 +35,15 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(def provider.ToolDef, h Handler) {
 	r.tools[def.Name] = h
 	r.toolDefs[def.Name] = def
+}
+
+func (r *Registry) RegisterReadOnly(def provider.ToolDef, h Handler) {
+	r.Register(def, h)
+	r.readonly[def.Name] = true
+}
+
+func (r *Registry) IsReadOnly(name string) bool {
+	return r.readonly[name]
 }
 
 func (r *Registry) GetDefs(names []string) []provider.ToolDef {
@@ -61,8 +72,11 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]any
 }
 
 func (r *Registry) registerBuiltins() {
+	r.registerHTTP()
+	r.registerPatch()
+
 	// file_read
-	r.Register(provider.ToolDef{
+	r.RegisterReadOnly(provider.ToolDef{
 		Name:        "file_read",
 		Description: "Read the contents of a file at the given path",
 		Parameters: map[string]any{
@@ -78,7 +92,9 @@ func (r *Registry) registerBuiltins() {
 		if err != nil {
 			return "", err
 		}
-		return string(data), nil
+		lines := strings.Count(string(data), "\n") + 1
+		size := len(data)
+		return fmt.Sprintf("[read %s: %d lines, %d bytes]\n%s", p, lines, size, string(data)), nil
 	})
 
 	// file_write
@@ -99,7 +115,20 @@ func (r *Registry) registerBuiltins() {
 		if idx := strings.LastIndex(p, "/"); idx > 0 {
 			os.MkdirAll(p[:idx], 0755)
 		}
-		return "ok", os.WriteFile(p, []byte(content), 0644)
+		// check if file exists for diff
+		oldData, readErr := os.ReadFile(p)
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			return "", err
+		}
+		lines := strings.Count(content, "\n") + 1
+		if readErr != nil {
+			return fmt.Sprintf("created %s (%d lines, %d bytes)", p, lines, len(content)), nil
+		}
+		result := fmt.Sprintf("wrote %s (%d lines, %d bytes)", p, lines, len(content))
+		if diff := FormatDiff(string(oldData), content); diff != "" {
+			result += "\n" + diff
+		}
+		return result, nil
 	})
 
 	// file_edit
@@ -143,11 +172,21 @@ func (r *Registry) registerBuiltins() {
 		result = append(result, content)
 		result = append(result, lines[endLine:]...)
 
-		return "ok", os.WriteFile(p, []byte(strings.Join(result, "\n")), 0644)
+		if err := os.WriteFile(p, []byte(strings.Join(result, "\n")), 0644); err != nil {
+			return "", err
+		}
+		oldChunk := strings.Join(lines[startLine-1:endLine], "\n")
+		newLines := strings.Count(content, "\n") + 1
+		replaced := endLine - startLine + 1
+		msg := fmt.Sprintf("edited %s: replaced lines %d-%d (%d lines) with %d lines", p, startLine, endLine, replaced, newLines)
+		if diff := FormatDiff(oldChunk, content); diff != "" {
+			msg += "\n" + diff
+		}
+		return msg, nil
 	})
 
 	// file_list
-	r.Register(provider.ToolDef{
+	r.RegisterReadOnly(provider.ToolDef{
 		Name:        "file_list",
 		Description: "List directory contents as a tree. Returns file/directory names with indentation showing structure.",
 		Parameters: map[string]any{
@@ -201,13 +240,13 @@ func (r *Registry) registerBuiltins() {
 
 		walk(p, "", 1)
 		if count == 0 {
-			return "empty directory", nil
+			return fmt.Sprintf("%s: empty directory", p), nil
 		}
-		return sb.String(), nil
+		return fmt.Sprintf("[%s: %d entries]\n%s", p, count, sb.String()), nil
 	})
 
 	// grep
-	r.Register(provider.ToolDef{
+	r.RegisterReadOnly(provider.ToolDef{
 		Name:        "grep",
 		Description: "Search for a text pattern in files. Returns matching lines with file path and line number. Searches recursively by default.",
 		Parameters: map[string]any{
@@ -286,9 +325,9 @@ func (r *Registry) registerBuiltins() {
 		}
 
 		if matches == 0 {
-			return "no matches found", nil
+			return fmt.Sprintf("no matches for '%s' in %s", pattern, p), nil
 		}
-		return sb.String(), nil
+		return fmt.Sprintf("[%d matches for '%s' in %s]\n%s", matches, pattern, p, sb.String()), nil
 	})
 
 	// bash
@@ -331,7 +370,10 @@ func (r *Registry) registerBuiltins() {
 			return "", fmt.Errorf("command timeout after 30 seconds - may be waiting for input")
 		}
 		if err != nil {
-			return string(out) + "\n" + err.Error(), nil
+			return fmt.Sprintf("[exit %s]\n%s", err.Error(), string(out)), nil
+		}
+		if len(out) == 0 {
+			return "(no output)", nil
 		}
 		return string(out), nil
 	})

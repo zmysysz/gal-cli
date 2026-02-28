@@ -73,6 +73,8 @@ tools:
   - grep
   - bash
   - interactive
+  - http
+  - file_patch
 
 skills: []
 

@@ -111,6 +111,9 @@ func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText
 		if round > maxRounds {
 			return fmt.Errorf("agentic loop exceeded %d rounds, stopping", maxRounds)
 		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		var fullContent string
 		var toolCalls []provider.ToolCall
 
@@ -198,33 +201,75 @@ func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText
 			}
 		}
 
-		// Process all tool calls
-		for i, tc := range toolCalls {
-			if onToolCall != nil {
-				onToolCall(tc.Function.Name)
-			}
+		// Process all tool calls — readonly tools run in parallel, others serial
+		type toolResult struct {
+			index  int
+			result string
+		}
 
-			var args map[string]any
-			json.Unmarshal([]byte(tc.Function.Arguments), &args)
-
-			e.debugLog("TOOL_CALL: %s args=%s", tc.Function.Name, tc.Function.Arguments)
-
-			var result string
-			var err error
-			
-			// Check if this is the interactive tool that we collected input for
-			if i == interactiveToolIndex && interactiveResults != nil {
-				// Return all collected results as JSON
-				resultJSON, _ := json.Marshal(interactiveResults)
-				result = string(resultJSON)
-			} else {
-				// Execute non-interactive tools normally
-				result, err = e.Agent.Registry.Execute(ctx, tc.Function.Name, args)
-				if err != nil {
-					result = "error: " + err.Error()
+		// Identify readonly batch (only if ALL are readonly and no interactive)
+		allReadOnly := interactiveToolIndex < 0
+		if allReadOnly {
+			for _, tc := range toolCalls {
+				if !e.Agent.Registry.IsReadOnly(tc.Function.Name) {
+					allReadOnly = false
+					break
 				}
 			}
+		}
 
+		results := make([]string, len(toolCalls))
+
+		if allReadOnly && len(toolCalls) > 1 {
+			// parallel execution
+			ch := make(chan toolResult, len(toolCalls))
+			for i, tc := range toolCalls {
+				if onToolCall != nil {
+					onToolCall(tc.Function.Name)
+				}
+				go func(idx int, tc provider.ToolCall) {
+					var args map[string]any
+					json.Unmarshal([]byte(tc.Function.Arguments), &args)
+					e.debugLog("TOOL_CALL[parallel]: %s args=%s", tc.Function.Name, tc.Function.Arguments)
+					res, err := e.Agent.Registry.Execute(ctx, tc.Function.Name, args)
+					if err != nil {
+						res = "error: " + err.Error()
+					}
+					ch <- toolResult{idx, res}
+				}(i, tc)
+			}
+			for range toolCalls {
+				tr := <-ch
+				results[tr.index] = tr.result
+			}
+		} else {
+			// serial execution
+			for i, tc := range toolCalls {
+				if onToolCall != nil {
+					onToolCall(tc.Function.Name)
+				}
+
+				var args map[string]any
+				json.Unmarshal([]byte(tc.Function.Arguments), &args)
+
+				e.debugLog("TOOL_CALL: %s args=%s", tc.Function.Name, tc.Function.Arguments)
+
+				if i == interactiveToolIndex && interactiveResults != nil {
+					resultJSON, _ := json.Marshal(interactiveResults)
+					results[i] = string(resultJSON)
+				} else {
+					res, err := e.Agent.Registry.Execute(ctx, tc.Function.Name, args)
+					if err != nil {
+						res = "error: " + err.Error()
+					}
+					results[i] = res
+				}
+			}
+		}
+
+		// Emit results and append messages
+		for i, tc := range toolCalls {
+			result := results[i]
 			e.debugLog("TOOL_RESULT: %s (%d chars)", tc.Function.Name, len(result))
 
 			if onToolResult != nil {
