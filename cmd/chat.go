@@ -317,6 +317,12 @@ func printAbove(s string) tea.Cmd {
 	return tea.Println(s)
 }
 
+func (m *model) quitCmd() tea.Cmd {
+	saveHistory(m.inputHist)
+	bye := sDim.Render(fmt.Sprintf("👋 Bye! Resume with: gal-cli chat --session %s", m.sess.ID))
+	return tea.Sequence(printAbove(bye), tea.Quit)
+}
+
 // renderToolResult colorizes tool result output, highlighting diff lines.
 func renderToolResult(s string) string {
 	lines := strings.Split(s, "\n")
@@ -423,8 +429,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.compressing = false
 				return m, printAbove(sErr.Render("✘ Cancelled"))
 			}
-			saveHistory(m.inputHist)
-			return m, tea.Quit
+			return m, m.quitCmd()
 		}
 		if m.waiting {
 			return m, nil
@@ -511,13 +516,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			
 			if isBuiltinCmd {
 				if input == "/quit" || input == "/exit" {
-					saveHistory(m.inputHist)
-					return m, tea.Quit
+					return m, m.quitCmd()
 				}
 				msg, quit := m.handleCommand(input)
 				if quit {
-					saveHistory(m.inputHist)
-					return m, tea.Quit
+					return m, m.quitCmd()
 				}
 				// Return the message directly to Update
 				return m.Update(msg)
