@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -242,7 +243,9 @@ func (m *model) applyCompletion() {
 	if len(parts) == 1 && !strings.HasSuffix(val, " ") {
 		m.input.SetValue(sel + " ")
 	} else {
-		m.input.SetValue(parts[0] + " " + sel)
+		// Keep everything before the last token, replace only the last token
+		prefix := strings.Join(parts[:len(parts)-1], " ") + " "
+		m.input.SetValue(prefix + sel)
 	}
 	m.input.CursorEnd()
 	m.compIdx = 0
@@ -270,6 +273,7 @@ type model struct {
 	streamCh     chan tea.Msg
 	lastStreamLn string // last partial line printed during streaming
 	compressing  bool
+	startTime    time.Time // track request start time
 	// shell mode
 	shellMode        bool
 	shellCwd         string
@@ -319,6 +323,12 @@ func printAbove(s string) tea.Cmd {
 
 func (m *model) quitCmd() tea.Cmd {
 	saveHistory(m.inputHist)
+	// Cancel any in-flight LLM request so goroutines can exit
+	if m.cancelFn != nil {
+		m.cancelFn()
+		m.cancelFn = nil
+	}
+	tool.CloseBrowser()
 	bye := sDim.Render(fmt.Sprintf("👋 Bye! Resume with: gal-cli chat --session %s", m.sess.ID))
 	return tea.Sequence(printAbove(bye), tea.Quit)
 }
@@ -347,11 +357,15 @@ func renderToolResult(s string) string {
 }
 
 func (m *model) statusBar() string {
+	elapsed := ""
+	if !m.startTime.IsZero() {
+		elapsed = fmt.Sprintf(" %.1fs", time.Since(m.startTime).Seconds())
+	}
 	if m.waiting {
-		return m.spinner.View() + sFaint.Render(" thinking...")
+		return m.spinner.View() + sFaint.Render(" thinking..."+elapsed)
 	}
 	if m.compressing {
-		return m.spinner.View() + sFaint.Render(" compressing context...")
+		return m.spinner.View() + sFaint.Render(" compressing context..."+elapsed)
 	}
 	if comps := m.completions(); len(comps) > 0 {
 		var hints []string
@@ -416,6 +430,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}()
 				}
+				// Clean up incomplete tool_call sequences
+				m.eng.Messages = cleanMessages(m.eng.Messages)
 				return m, printAbove(sErr.Render("✘ Interactive input cancelled"))
 			}
 			// If waiting for LLM/tool response, cancel it
@@ -427,6 +443,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.streaming = ""
 				m.waiting = false
 				m.compressing = false
+				// Clean up incomplete tool_call sequences in case rollback didn't cover it
+				m.eng.Messages = cleanMessages(m.eng.Messages)
 				return m, printAbove(sErr.Render("✘ Cancelled"))
 			}
 			return m, m.quitCmd()
@@ -542,6 +560,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// chat mode: send to LLM
 			m.waiting = true
+			m.startTime = time.Now()
 			return m, tea.Batch(printAbove(sPrompt.Render("▶ ")+input), m.sendCmd(input))
 		}
 
@@ -561,6 +580,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(printAbove(renderToolResult(string(msg))), waitForStream(m.streamCh))
 
 	case streamDoneMsg:
+		elapsed := ""
+		if !m.startTime.IsZero() {
+			provider := strings.Split(m.eng.Agent.CurrentModel, "/")[0]
+			model := strings.Split(m.eng.Agent.CurrentModel, "/")[1]
+			elapsed = sDim.Render(fmt.Sprintf("✓ by %s/%s in %.2fs", provider, model, time.Since(m.startTime).Seconds()))
+			m.startTime = time.Time{} // reset
+		}
 		rendered := msg.content
 		if m.renderer != nil {
 			if out, err := m.renderer.Render(msg.content); err == nil {
@@ -572,7 +598,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// trigger compression check
 		if m.eng.NeedsCompression() {
 			m.compressing = true
+			m.startTime = time.Now() // restart timer for compression
+			if elapsed != "" {
+				return m, tea.Batch(printAbove(rendered), printAbove(elapsed), m.compressCmd())
+			}
 			return m, tea.Batch(printAbove(rendered), m.compressCmd())
+		}
+		if elapsed != "" {
+			return m, tea.Batch(printAbove(rendered), printAbove(elapsed))
 		}
 		return m, printAbove(rendered)
 
@@ -581,7 +614,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, printAbove(sFaint.Render(m.shellCwd))
 
 	case compressDoneMsg:
+		elapsed := ""
+		if !m.startTime.IsZero() {
+			elapsed = sDim.Render(fmt.Sprintf("✓ context compressed in %.2fs", time.Since(m.startTime).Seconds()))
+			m.startTime = time.Time{} // reset
+		}
 		m.compressing = false
+		if elapsed != "" {
+			return m, printAbove(elapsed)
+		}
 		return m, nil
 
 	case compressErrMsg:
@@ -616,7 +657,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.interactiveMode = false
 			m.waiting = true
 			cmds = append(cmds, func() tea.Msg {
-				// Send results back through the channel
+				// Send results back through the stream channel
 				m.streamCh <- interactiveResponseMsg{
 					results: m.interactiveResults,
 					err:     nil,
@@ -777,10 +818,14 @@ func (m model) View() string {
 		return m.wrapInput() + "\n" + status
 	}
 	if m.waiting {
-		if m.streaming != "" {
-			return m.streaming + "\n" + m.spinner.View() + sFaint.Render(" streaming...")
+		elapsed := ""
+		if !m.startTime.IsZero() {
+			elapsed = fmt.Sprintf(" %.1fs", time.Since(m.startTime).Seconds())
 		}
-		return m.spinner.View() + sFaint.Render(" thinking...")
+		if m.streaming != "" {
+			return m.streaming + "\n" + m.spinner.View() + sFaint.Render(" streaming..."+elapsed)
+		}
+		return m.spinner.View() + sFaint.Render(" thinking..."+elapsed)
 	}
 	return m.wrapInput() + "\n" + m.statusBar()
 }
@@ -822,25 +867,21 @@ func (m *model) sendCmd(input string) tea.Cmd {
 				ch <- streamToolResultMsg(preview)
 			},
 			func(requests []engine.InteractiveInputRequest) (map[string]string, error) {
-				// Signal that we need interactive input
 				ch <- interactiveRequestMsg{requests: requests}
-				// Wait for response
-				response := <-ch
-				if resp, ok := response.(interactiveResponseMsg); ok {
-					return resp.results, resp.err
+				// Wait for response, skip any non-response messages
+				for {
+					response := <-ch
+					if resp, ok := response.(interactiveResponseMsg); ok {
+						return resp.results, resp.err
+					}
 				}
-				return nil, fmt.Errorf("unexpected response type")
 			},
 		)
 		if err != nil {
 			if ctx.Err() != nil {
-				return // cancelled, defer handles cleanup
+				return // cancelled, rollback already done in engine
 			}
 			ch <- streamErrMsg{err}
-			return
-		}
-		if fullContent == "" {
-			ch <- streamErrMsg{fmt.Errorf("empty response from model (no content received)")}
 			return
 		}
 		ch <- streamDoneMsg{fullContent}
@@ -948,6 +989,11 @@ Interactive Tool:
   - Progressive prompts (one question at a time)
   - Sensitive fields (passwords) are marked with 🔒
 
+Browser Tool:
+  - LLM can use 'browser' tool for headless browser automation
+  - Actions: navigate, click, fill, select, screenshot, get_text, eval, etc.
+  - Use for web scraping, form filling, login automation, testing
+
 Non-Interactive Mode Examples:
   gal-cli chat -m "your message"
   gal-cli chat -m @prompt.txt
@@ -1001,16 +1047,9 @@ Non-Interactive Mode Examples:
 		if len(mp) != 2 {
 			return sErr.Render("✘ invalid model format: " + newModel + " (expected provider/model)"), false
 		}
-		pConf, ok := m.cfg.Providers[mp[0]]
-		if !ok {
-			return sErr.Render("✘ unknown provider: " + mp[0]), false
-		}
-		var p provider.Provider
-		switch pConf.Type {
-		case "anthropic":
-			p = &provider.Anthropic{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
-		default:
-			p = &provider.OpenAI{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
+		p, err := makeProvider(m.cfg, mp[0])
+		if err != nil {
+			return sErr.Render("✘ " + err.Error()), false
 		}
 		m.eng.Provider = p
 		m.eng.SwitchModel(newModel)
@@ -1057,17 +1096,9 @@ func runChat(agentName, modelName, sessionID, message string, debug bool) error 
 
 	// restore model from session if resuming
 	if resumed && sess.Model != "" {
-		// switch provider to match saved model
 		mp := strings.SplitN(sess.Model, "/", 2)
 		if len(mp) == 2 {
-			if pConf, ok := cfg.Providers[mp[0]]; ok {
-				var p provider.Provider
-				switch pConf.Type {
-				case "anthropic":
-					p = &provider.Anthropic{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
-				default:
-					p = &provider.OpenAI{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
-				}
+			if p, err := makeProvider(cfg, mp[0]); err == nil {
 				eng.Provider = p
 				eng.SwitchModel(sess.Model)
 			}
@@ -1079,14 +1110,7 @@ func runChat(agentName, modelName, sessionID, message string, debug bool) error 
 	if modelName != "" {
 		mp := strings.SplitN(modelName, "/", 2)
 		if len(mp) == 2 {
-			if pConf, ok := cfg.Providers[mp[0]]; ok {
-				var p provider.Provider
-				switch pConf.Type {
-				case "anthropic":
-					p = &provider.Anthropic{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
-				default:
-					p = &provider.OpenAI{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
-				}
+			if p, err := makeProvider(cfg, mp[0]); err == nil {
 				eng.Provider = p
 				eng.SwitchModel(modelName)
 			}
@@ -1114,8 +1138,8 @@ func runChat(agentName, modelName, sessionID, message string, debug bool) error 
 	_, err = p.Run()
 	fmt.Print("\033[0 q") // restore default cursor
 
-	// save session on exit
-	sess.Messages = eng.Messages
+	// save session on exit — clean up incomplete tool_call sequences
+	sess.Messages = cleanMessages(eng.Messages)
 	sess.Agent = eng.Agent.Conf.Name
 	sess.Model = eng.Agent.CurrentModel
 	sess.Save()
@@ -1456,16 +1480,53 @@ func buildEngine(cfg *config.Config, agentName string, reg *tool.Registry) (*eng
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid model format: %s (expected provider/model)", a.CurrentModel)
 	}
-	pConf, ok := cfg.Providers[parts[0]]
-	if !ok {
-		return nil, fmt.Errorf("unknown provider: %s", parts[0])
-	}
-	var p provider.Provider
-	switch pConf.Type {
-	case "anthropic":
-		p = &provider.Anthropic{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
-	default:
-		p = &provider.OpenAI{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL}
+	p, err := makeProvider(cfg, parts[0])
+	if err != nil {
+		return nil, err
 	}
 	return engine.New(a, p), nil
+}
+
+// cleanMessages removes trailing incomplete tool_call sequences.
+// A complete sequence ends with assistant{content}. If the tail is
+// tool results or assistant{tool_calls} without a final text response,
+// strip them back to the last clean state.
+func cleanMessages(msgs []provider.Message) []provider.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	last := msgs[len(msgs)-1]
+	// If last message is a complete assistant text response, nothing to clean
+	if last.Role == "assistant" && last.Content != "" && len(last.ToolCalls) == 0 {
+		return msgs
+	}
+	// If last message is user or system, nothing to clean
+	if last.Role == "user" || last.Role == "system" {
+		return msgs
+	}
+	// Strip trailing tool/assistant{tool_calls} messages
+	for len(msgs) > 0 {
+		tail := msgs[len(msgs)-1]
+		if tail.Role == "tool" || (tail.Role == "assistant" && len(tail.ToolCalls) > 0) {
+			msgs = msgs[:len(msgs)-1]
+			continue
+		}
+		break
+	}
+	return msgs
+}
+
+func makeProvider(cfg *config.Config, providerName string) (provider.Provider, error) {
+	pConf, ok := cfg.Providers[providerName]
+	if !ok {
+		return nil, fmt.Errorf("unknown provider: %s", providerName)
+	}
+	timeout := time.Duration(cfg.Timeout) * time.Second
+	retries := cfg.Retries
+	switch pConf.Type {
+	case "anthropic":
+		return &provider.Anthropic{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL, Timeout: timeout, Retries: retries}, nil
+	default:
+		return &provider.OpenAI{APIKey: os.ExpandEnv(pConf.APIKey), BaseURL: pConf.BaseURL, Timeout: timeout, Retries: retries}, nil
+	}
 }

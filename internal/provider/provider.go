@@ -43,13 +43,14 @@ type Provider interface {
 // DebugFunc is an optional debug logger that providers can use.
 type DebugFunc func(format string, args ...any)
 
-// doWithRetry sends an HTTP request with one retry on 429 or 5xx.
-func doWithRetry(req *http.Request, payload []byte, dbg DebugFunc) (*http.Response, error) {
+// doWithRetry sends an HTTP request with configurable retries on 429 or 5xx.
+func doWithRetry(req *http.Request, payload []byte, dbg DebugFunc, timeout time.Duration, retries int) (*http.Response, error) {
+	client := &http.Client{Timeout: timeout}
 	if dbg != nil {
-		dbg("HTTP %s %s (%d bytes)", req.Method, req.URL.String(), len(payload))
+		dbg("HTTP %s %s (%d bytes, timeout=%s, retries=%d)", req.Method, req.URL.String(), len(payload), timeout, retries)
 		dbg("Request Headers: %v", req.Header)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		if dbg != nil {
 			dbg("HTTP ERROR: %v", err)
@@ -60,18 +61,20 @@ func doWithRetry(req *http.Request, payload []byte, dbg DebugFunc) (*http.Respon
 		dbg("HTTP RESPONSE: %d %s", resp.StatusCode, resp.Status)
 		dbg("Response Content-Encoding: %s", resp.Header.Get("Content-Encoding"))
 	}
-	if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+	for i := 0; i < retries && (resp.StatusCode == 429 || resp.StatusCode >= 500); i++ {
 		resp.Body.Close()
 		if dbg != nil {
-			dbg("HTTP RETRY: waiting 2s then retrying...")
+			dbg("HTTP RETRY %d/%d: waiting 2s then retrying...", i+1, retries)
 		}
 		time.Sleep(2 * time.Second)
 		req.Body = io.NopCloser(bytes.NewReader(payload))
-		resp, err = http.DefaultClient.Do(req)
-		if dbg != nil && err == nil {
-			dbg("HTTP RETRY RESPONSE: %d %s", resp.StatusCode, resp.Status)
+		resp, err = client.Do(req)
+		if err != nil {
+			return nil, err
 		}
-		return resp, err
+		if dbg != nil {
+			dbg("HTTP RETRY %d/%d RESPONSE: %d %s", i+1, retries, resp.StatusCode, resp.Status)
+		}
 	}
 	return resp, nil
 }

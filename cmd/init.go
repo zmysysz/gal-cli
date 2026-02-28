@@ -10,6 +10,9 @@ import (
 )
 
 var defaultGalYAML = `default_agent: default
+context_limit: 60000    # token threshold for auto context compression
+timeout: 1800           # HTTP timeout in seconds for LLM API calls
+retries: 1              # retry count on 429/5xx errors
 
 providers:
   openai:
@@ -75,6 +78,7 @@ tools:
   - interactive
   - http
   - file_patch
+  - browser
 
 skills: []
 

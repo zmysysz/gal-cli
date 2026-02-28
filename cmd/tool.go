@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/gal-cli/gal-cli/internal/tool"
 	"github.com/spf13/cobra"
@@ -14,7 +15,11 @@ func init() {
 		Run: func(cmd *cobra.Command, args []string) {
 			reg := tool.NewRegistry()
 			for _, d := range reg.GetDefs(nil) {
-				fmt.Printf("  %-12s %s\n", d.Name, d.Description)
+				desc := d.Description
+				if i := strings.IndexAny(desc, ".\n"); i > 0 {
+					desc = desc[:i]
+				}
+				fmt.Printf("  %-12s %s\n", d.Name, desc)
 			}
 		},
 	})

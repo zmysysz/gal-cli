@@ -13,13 +13,14 @@ import (
 )
 
 type Engine struct {
-	Agent        *agent.Agent
-	Provider     provider.Provider
-	Messages     []provider.Message
-	ContextLimit int
-	Debug        bool
-	debugFile    *os.File
-	debugTurn    int
+	Agent           *agent.Agent
+	Provider        provider.Provider
+	Messages        []provider.Message
+	ContextLimit    int
+	Debug           bool
+	debugFile       *os.File
+	debugTurn       int
+	sensitiveValues []string // values to mask in display/logs
 }
 
 func New(a *agent.Agent, p provider.Provider) *Engine {
@@ -67,7 +68,11 @@ func (e *Engine) debugJSON(label string, v any) {
 		return
 	}
 	b, _ := json.Marshal(v)
-	go e.debugLog("%s:\n%s", label, string(b))
+	s := string(b)
+	for _, sv := range e.sensitiveValues {
+		s = strings.ReplaceAll(s, sv, "********")
+	}
+	go e.debugLog("%s:\n%s", label, s)
 }
 
 func (e *Engine) ModelID() string {
@@ -96,22 +101,33 @@ type InteractiveInputRequest struct {
 
 // SendWithInteractive adds support for interactive input collection
 func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText func(string), onToolCall func(string), onToolResult func(string), onInteractive func([]InteractiveInputRequest) (map[string]string, error)) error {
+	// Clean up any incomplete tool_call sequences from previous cancelled requests
+	e.cleanIncompleteToolCalls()
+
 	e.debugTurn++
 	turn := e.debugTurn
 	round := 0
 
+	snapshot := len(e.Messages) // rollback point on failure
 	e.Messages = append(e.Messages, provider.Message{Role: "user", Content: userMsg})
 	e.debugLog("========== TURN %d ==========", turn)
 	e.debugLog("USER: %s", userMsg)
+
+	rollback := func() {
+		e.Messages = e.Messages[:snapshot]
+		e.debugLog("ROLLBACK: messages restored to %d", snapshot)
+	}
 
 	const maxRounds = 50
 
 	for {
 		round++
 		if round > maxRounds {
+			rollback()
 			return fmt.Errorf("agentic loop exceeded %d rounds, stopping", maxRounds)
 		}
 		if ctx.Err() != nil {
+			rollback()
 			return ctx.Err()
 		}
 		var fullContent string
@@ -137,12 +153,17 @@ func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText
 		})
 		if err != nil {
 			e.debugLog("ERROR turn %d / round %d: %v", turn, round, err)
+			rollback()
 			return err
 		}
 
 		if len(toolCalls) == 0 {
 			e.Messages = append(e.Messages, provider.Message{Role: "assistant", Content: fullContent})
 			e.debugLog("RESPONSE turn %d / round %d: text (%d chars)", turn, round, len(fullContent))
+			if fullContent == "" {
+				rollback()
+				return fmt.Errorf("empty response from %s (no content, no tool calls, round %d)", e.Agent.CurrentModel, round)
+			}
 			return nil
 		}
 
@@ -163,26 +184,32 @@ func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText
 				if fieldsRaw, ok := args["fields"].([]any); ok {
 					for _, fieldRaw := range fieldsRaw {
 						if fieldMap, ok := fieldRaw.(map[string]any); ok {
-							// Check if type is "interactive_input"
-							if typeVal := getStringField(fieldMap, "type"); typeVal == "interactive_input" {
-								req := InteractiveInputRequest{
-									Name:            getStringField(fieldMap, "name"),
-									InteractiveType: getStringField(fieldMap, "interactive_type"),
-									InteractiveHint: getStringField(fieldMap, "interactive_hint"),
-									Sensitive:       getBoolField(fieldMap, "sensitive"),
-								}
-								
-								// Extract options for select type
-								if opts, ok := fieldMap["options"].([]any); ok {
-									for _, opt := range opts {
-										if s, ok := opt.(string); ok {
-											req.Options = append(req.Options, s)
-										}
+							req := InteractiveInputRequest{
+								Name:            getStringField(fieldMap, "name"),
+								InteractiveType: getStringField(fieldMap, "interactive_type"),
+								InteractiveHint: getStringField(fieldMap, "interactive_hint"),
+								Sensitive:       getBoolField(fieldMap, "sensitive"),
+							}
+							if req.InteractiveType == "" {
+								req.InteractiveType = "blank"
+							}
+							if req.InteractiveHint == "" {
+								req.InteractiveHint = req.Name
+							}
+							
+							// Extract options for select type
+							if opts, ok := fieldMap["options"].([]any); ok {
+								for _, opt := range opts {
+									if s, ok := opt.(string); ok {
+										req.Options = append(req.Options, s)
 									}
 								}
-								
-								interactiveRequests = append(interactiveRequests, req)
+								if req.InteractiveType == "blank" && len(req.Options) > 0 {
+									req.InteractiveType = "select"
+								}
 							}
+							
+							interactiveRequests = append(interactiveRequests, req)
 						}
 					}
 					interactiveToolIndex = i
@@ -193,11 +220,23 @@ func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText
 		
 		// If we have interactive requests and a handler, collect input
 		var interactiveResults map[string]string
+		var sensitiveKeys map[string]bool
 		if len(interactiveRequests) > 0 && onInteractive != nil {
 			var err error
 			interactiveResults, err = onInteractive(interactiveRequests)
 			if err != nil {
+				rollback()
 				return err
+			}
+			// Track which fields are sensitive for masking in display/logs
+			sensitiveKeys = make(map[string]bool)
+			for _, req := range interactiveRequests {
+				if req.Sensitive {
+					sensitiveKeys[req.Name] = true
+					if v := interactiveResults[req.Name]; v != "" {
+						e.sensitiveValues = append(e.sensitiveValues, v)
+					}
+				}
 			}
 		}
 
@@ -276,10 +315,27 @@ func (e *Engine) SendWithInteractive(ctx context.Context, userMsg string, onText
 		// Emit results and append messages
 		for i, tc := range toolCalls {
 			tr := results[i]
-			e.debugLog("TOOL_RESULT: %s (%d chars, %v)", tc.Function.Name, len(tr.result), tr.elapsed)
+
+			// Build masked version for display/logs if this is interactive with sensitive fields
+			displayResult := tr.result
+			if i == interactiveToolIndex && len(sensitiveKeys) > 0 {
+				var parsed map[string]any
+				if json.Unmarshal([]byte(tr.result), &parsed) == nil {
+					for k := range sensitiveKeys {
+						if _, ok := parsed[k]; ok {
+							parsed[k] = "********"
+						}
+					}
+					if masked, err := json.Marshal(parsed); err == nil {
+						displayResult = string(masked)
+					}
+				}
+			}
+
+			e.debugLog("TOOL_RESULT: %s (%d chars, %v) %s", tc.Function.Name, len(tr.result), tr.elapsed, displayResult)
 
 			if onToolResult != nil {
-				preview := tr.result
+				preview := displayResult
 				if len(preview) > 200 {
 					preview = preview[:200] + "..."
 				}
@@ -303,6 +359,26 @@ func (e *Engine) Clear() {
 
 func (e *Engine) SwitchModel(model string) {
 	e.Agent.CurrentModel = model
+}
+
+// cleanIncompleteToolCalls strips trailing incomplete tool_call sequences
+// (assistant with tool_calls not followed by matching tool results).
+func (e *Engine) cleanIncompleteToolCalls() {
+	for len(e.Messages) > 0 {
+		last := e.Messages[len(e.Messages)-1]
+		if last.Role == "assistant" && last.Content != "" && len(last.ToolCalls) == 0 {
+			break
+		}
+		if last.Role == "user" || last.Role == "system" {
+			break
+		}
+		if last.Role == "tool" || (last.Role == "assistant" && len(last.ToolCalls) > 0) {
+			e.debugLog("CLEAN: removing trailing %s message", last.Role)
+			e.Messages = e.Messages[:len(e.Messages)-1]
+			continue
+		}
+		break
+	}
 }
 
 func (e *Engine) Close() {

@@ -9,11 +9,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type Anthropic struct {
 	APIKey  string
 	BaseURL string
+	Timeout time.Duration
+	Retries int
 	Debug   DebugFunc
 }
 
@@ -100,7 +103,7 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 	req.Header.Set("x-api-key", a.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := doWithRetry(req, payload, a.Debug)
+	resp, err := doWithRetry(req, payload, a.Debug, a.Timeout, a.Retries)
 	if err != nil {
 		return err
 	}
@@ -114,9 +117,11 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 		return fmt.Errorf("Anthropic API error %d: %s", resp.StatusCode, string(b))
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := bufio.NewScanner(&idleTimeoutReader{r: resp.Body, timeout: 300 * time.Second})
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // up to 1MB lines
 	var currentToolID, currentToolName, currentToolArgs string
 	chunkCount := 0
+	hasContent := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -157,8 +162,10 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 			}
 		case "content_block_delta":
 			if event.Delta.Type == "text_delta" {
+				hasContent = true
 				onDelta(StreamDelta{Content: event.Delta.Text})
 			} else if event.Delta.Type == "input_json_delta" {
+				hasContent = true
 				currentToolArgs += event.Delta.PartialJSON
 			}
 		case "content_block_stop":
@@ -178,7 +185,16 @@ func (a *Anthropic) ChatStream(ctx context.Context, model string, messages []Mes
 		}
 	}
 	if a.Debug != nil {
-		a.Debug("STREAM END: scanner finished, %d chunks, err=%v", chunkCount, scanner.Err())
+		a.Debug("STREAM END: scanner finished, %d chunks, hasContent=%v, err=%v", chunkCount, hasContent, scanner.Err())
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("stream read error after %d chunks: %w", chunkCount, err)
+	}
+	if chunkCount > 0 {
+		return fmt.Errorf("stream ended without message_stop after %d chunks (connection may have dropped)", chunkCount)
+	}
+	if !hasContent {
+		return fmt.Errorf("empty response from Anthropic API (%d events parsed)", chunkCount)
+	}
+	return nil
 }

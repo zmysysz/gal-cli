@@ -23,7 +23,7 @@ const (
 func (r *Registry) registerHTTP() {
 	r.RegisterReadOnly(provider.ToolDef{
 		Name:        "http",
-		Description: "Make HTTP requests to any URL. This is the preferred tool for all HTTP/API requests — use this instead of curl/wget in bash. Supports all RESTful methods (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS). Returns structured JSON with status, headers, body, size, and timing. Use for API calls, web scraping, health checks, and webhooks. For sensitive data (API keys, tokens), use the 'interactive' tool to collect them first, then pass via headers.",
+		Description: "The primary tool for all HTTP/REST/API requests — always use this FIRST instead of curl/wget in bash. Advantages over bash+curl: structured JSON output (no jq needed), automatic error handling, faster (no shell startup), better readability. Supports GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS. Returns status, headers, body, size, and timing as JSON. Only fall back to bash for features this tool lacks (e.g. file upload, WebSocket, streaming download). For sensitive data (API keys, tokens), use the 'interactive' tool to collect them first, then pass via headers.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

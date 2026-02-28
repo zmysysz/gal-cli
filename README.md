@@ -18,7 +18,7 @@ A lightweight, extensible multi-agent CLI tool for LLM workflows — built for d
 
 - **Multi-agent** — define multiple agents with different system prompts, tools, and models; switch on the fly
 - **Multi-provider** — OpenAI, Anthropic, DeepSeek, Ollama, ZhipuAI (any OpenAI-compatible API)
-- **Tool calling** — built-in tools (`file_read`, `file_write`, `file_edit`, `file_patch`, `file_list`, `grep`, `bash`, `http`, `interactive`) with agentic loop
+- **Tool calling** — built-in tools (`file_read`, `file_write`, `file_edit`, `file_patch`, `file_list`, `grep`, `bash`, `http`, `interactive`, `browser`) with agentic loop
 - **Interactive input** — LLM can collect user information progressively (passwords, choices, etc.) without multiple back-and-forth messages
 - **Skills** — user-defined capability packs: prompt injection via `SKILL.md` + auto-registered script tools
 - **MCP** — connect to remote tool servers via HTTP-based Model Context Protocol
@@ -367,6 +367,7 @@ When the LLM decides to call a tool (built-in, skill script, or MCP), gal-cli ex
 | `bash` | Execute shell commands (30s timeout) |
 | `http` | Make HTTP requests (GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS). Returns structured JSON |
 | `interactive` | Collect user input progressively (passwords, choices, etc.) |
+| `browser` | Headless browser automation (navigate, click, fill, screenshot, scrape). Powered by Rod |
 
 Read-only tools (`file_read`, `file_list`, `grep`, `http`) execute in parallel when the LLM requests multiple in one turn. Write tools run serially.
 

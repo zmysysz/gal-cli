@@ -9,21 +9,65 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type OpenAI struct {
 	APIKey  string
 	BaseURL string
+	Timeout time.Duration
+	Retries int
 	Debug   DebugFunc
+}
+
+// idleTimeoutReader wraps a reader and returns an error if no data is read within the timeout.
+// It uses a dedicated buffer to avoid data races when the underlying Read outlives the timeout.
+type idleTimeoutReader struct {
+	r       io.ReadCloser
+	timeout time.Duration
+	buf     []byte // internal buffer for safe async reads
+	n       int    // valid bytes in buf
+}
+
+func (itr *idleTimeoutReader) Read(p []byte) (int, error) {
+	// If we have buffered data from a previous async read, return it first
+	if itr.n > 0 {
+		n := copy(p, itr.buf[:itr.n])
+		itr.n = 0
+		return n, nil
+	}
+
+	type result struct {
+		n   int
+		err error
+	}
+	if itr.buf == nil || len(itr.buf) < len(p) {
+		itr.buf = make([]byte, len(p))
+	}
+	ch := make(chan result, 1)
+	go func() {
+		n, err := itr.r.Read(itr.buf[:len(p)])
+		ch <- result{n, err}
+	}()
+	select {
+	case res := <-ch:
+		// Copy from internal buffer to caller's buffer
+		copy(p[:res.n], itr.buf[:res.n])
+		return res.n, res.err
+	case <-time.After(itr.timeout):
+		// Close the underlying reader to unblock the goroutine
+		itr.r.Close()
+		return 0, fmt.Errorf("stream idle timeout (%s without data)", itr.timeout)
+	}
 }
 
 func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Message, tools []ToolDef, onDelta func(StreamDelta)) error {
 	// Convert messages to map format, ensuring content is omitted when empty and tool_calls present
 	msgs := make([]map[string]any, len(messages))
 	for i, m := range messages {
-		msg := map[string]any{"role": m.Role}
-		if m.Content != "" {
-			msg["content"] = m.Content
+		msg := map[string]any{"role": m.Role, "content": m.Content}
+		if m.Content == "" && (m.Role == "assistant" || m.Role == "tool") {
+			msg["content"] = nil
 		}
 		if len(m.ToolCalls) > 0 {
 			msg["tool_calls"] = m.ToolCalls
@@ -64,7 +108,7 @@ func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Messag
 		req.Header.Set("Authorization", "Bearer "+o.APIKey)
 	}
 
-	resp, err := doWithRetry(req, payload, o.Debug)
+	resp, err := doWithRetry(req, payload, o.Debug, o.Timeout, o.Retries)
 	if err != nil {
 		return err
 	}
@@ -78,15 +122,27 @@ func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Messag
 		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(b))
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
+	const streamIdleTimeout = 300 * time.Second // 5 min idle = dead stream (generous for reasoning models)
+
+	scanner := bufio.NewScanner(&idleTimeoutReader{r: resp.Body, timeout: streamIdleTimeout})
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // up to 1MB lines
 	// accumulate tool calls across chunks
 	tcAcc := map[int]*ToolCall{}
 	chunkCount := 0
+	hasContent := false
+	lastChunkTime := time.Now()
 
 	for scanner.Scan() {
+		now := time.Now()
+		idle := now.Sub(lastChunkTime)
+		lastChunkTime = now
+
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
 			continue
+		}
+		if o.Debug != nil && idle > 5*time.Second {
+			o.Debug("STREAM CHUNK %d: idle=%.1fs", chunkCount+1, idle.Seconds())
 		}
 		chunkCount++
 		data := strings.TrimPrefix(line, "data:")
@@ -132,9 +188,11 @@ func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Messag
 		delta := chunk.Choices[0].Delta
 
 		if delta.Content != "" {
+			hasContent = true
 			onDelta(StreamDelta{Content: delta.Content})
 		}
 		for _, tc := range delta.ToolCalls {
+			hasContent = true
 			if _, ok := tcAcc[tc.Index]; !ok {
 				tcAcc[tc.Index] = &ToolCall{Type: "function"}
 			}
@@ -149,7 +207,18 @@ func (o *OpenAI) ChatStream(ctx context.Context, model string, messages []Messag
 		}
 	}
 	if o.Debug != nil {
-		o.Debug("STREAM END: scanner finished, %d chunks, err=%v", chunkCount, scanner.Err())
+		totalIdle := time.Since(lastChunkTime)
+		o.Debug("STREAM END: scanner finished, %d chunks, hasContent=%v, finalIdle=%.1fs, err=%v", chunkCount, hasContent, totalIdle.Seconds(), scanner.Err())
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("stream read error after %d chunks: %w", chunkCount, err)
+	}
+	// Check if stream ended without [DONE] — likely a broken connection
+	if chunkCount > 0 {
+		return fmt.Errorf("stream ended without [DONE] after %d chunks (connection may have dropped)", chunkCount)
+	}
+	if !hasContent {
+		return fmt.Errorf("empty response from API (%d chunks parsed)", chunkCount)
+	}
+	return nil
 }

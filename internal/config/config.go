@@ -12,6 +12,8 @@ import (
 type Config struct {
 	DefaultAgent string                  `yaml:"default_agent"`
 	ContextLimit int                     `yaml:"context_limit"`
+	Timeout      int                     `yaml:"timeout"`      // HTTP timeout in seconds, default 1800
+	Retries      int                     `yaml:"retries"`      // retry count on 429/5xx, default 1
 	Providers    map[string]ProviderConf `yaml:"providers"`
 }
 
@@ -70,6 +72,12 @@ func Load() (*Config, error) {
 	}
 	if cfg.ContextLimit <= 0 {
 		cfg.ContextLimit = 60000
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = 1800
+	}
+	if cfg.Retries < 0 {
+		cfg.Retries = 1
 	}
 	return &cfg, nil
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gal-cli/gal-cli/internal/provider"
@@ -74,6 +75,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]any
 func (r *Registry) registerBuiltins() {
 	r.registerHTTP()
 	r.registerPatch()
+	r.registerBrowser()
 
 	// file_read
 	r.RegisterReadOnly(provider.ToolDef{
@@ -363,6 +365,12 @@ func (r *Registry) registerBuiltins() {
 		defer cancel()
 		
 		cmd := exec.CommandContext(ctx, "bash", "-c", command)
+		// Kill entire process group on timeout/cancel so background children
+		// don't hold stdout/stderr pipes open and block CombinedOutput forever.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
 		
 		// Capture output for non-interactive commands
 		out, err := cmd.CombinedOutput()
@@ -381,7 +389,10 @@ func (r *Registry) registerBuiltins() {
 	// interactive
 	r.Register(provider.ToolDef{
 		Name:        "interactive",
-		Description: "Collect user input interactively. Use this when you need information from the user instead of asking in text. CRITICAL: If a bash command requires interactive input (sudo password, SSH passphrase, database credentials), you MUST use this tool FIRST to collect the information, then use the values in your command. Examples: (1) sudo: collect password with this tool, then use 'echo $password | sudo -S command'. (2) SSH key: collect key_type and passphrase, then use in ssh-keygen. IMPORTANT: Before performing write operations, dangerous operations, privacy-related actions, or system modifications (file_write, file_edit, bash commands that modify files/system/network), you MUST use this tool to get user confirmation with options [\"yes\", \"no\", \"trust\"]. Only proceed if user selects \"yes\" or \"trust\". If \"trust\" is selected, you may skip confirmation for similar operations in this conversation. You can request multiple fields at once, and the user will be prompted for each one sequentially. Returns a JSON object with all collected values.",
+		Description: "Collect user input interactively. RULE: You MUST ALWAYS use this tool to collect ANY information from the user (credentials, phone numbers, verification codes, choices, confirmations, etc.). NEVER ask for user input via plain text response — always call this tool instead. " +
+			"If a bash command requires interactive input (sudo password, SSH passphrase, database credentials), use this tool FIRST to collect the information, then use the values in your command. " +
+			"Before performing write operations, dangerous operations, privacy-related actions, or system modifications, you MUST use this tool to get user confirmation with options [\"yes\", \"no\", \"trust\"]. Only proceed if user selects \"yes\" or \"trust\". If \"trust\" is selected, skip confirmation for similar operations in this conversation. " +
+			"You can request multiple fields at once, and the user will be prompted for each one sequentially. Returns a JSON object with all collected values.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
